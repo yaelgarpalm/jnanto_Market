@@ -195,6 +195,21 @@ export default function InventoryView({
             />
           </label>
           <label className="block font-bold uppercase tracking-wider text-[#6B665F]">
+            Cantidad Solicitada
+            <input
+              type="number"
+              min="1"
+              required
+              value={reservationForm.quantity}
+              onChange={(e) => setReservationForm((p: any) => ({ ...p, quantity: Number(e.target.value) }))}
+              className="mt-1 w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
+              placeholder="Ej. 5"
+            />
+            <span className="mt-0.5 block text-[10px] font-normal normal-case tracking-normal text-[#8A847C]">
+              Para maquinaria usa 1. Para materias primas indica las unidades que necesitas.
+            </span>
+          </label>
+          <label className="block font-bold uppercase tracking-wider text-[#6B665F]">
             Notas / Uso Planificado
             <input
               value={reservationForm.notes}

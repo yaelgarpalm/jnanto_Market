@@ -214,6 +214,9 @@ export default function CooperativeView({
                       <br />
                       Fin: {new Date(reservation.end_date).toLocaleString("es-MX")}
                     </p>
+                    <p className="text-[10px] font-bold text-[#2D2D2A] mt-1">
+                      Cantidad: {reservation.quantity ?? 1}
+                    </p>
                     {reservation.notes && (
                       <p className="text-[10px] text-[#6B665F] bg-white rounded-lg p-2 border border-[#E6E2DA]/50 mt-2 font-serif italic">
                         "{reservation.notes}"

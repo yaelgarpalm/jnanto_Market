@@ -157,6 +157,7 @@ export default function App() {
     resourceId: "",
     startDate: "2026-05-28T10:00",
     endDate: "2026-05-28T13:00",
+    quantity: 1,
     notes: "Uso para produccion artesanal.",
   });
 

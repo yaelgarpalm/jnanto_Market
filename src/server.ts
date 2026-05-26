@@ -1234,6 +1234,7 @@ app.post("/api/resources/reservations", requireAuth, async (req: AuthedRequest, 
       cooperative_name: resource.cooperative_id,
       start_date: req.body.startDate,
       end_date: req.body.endDate,
+      quantity: Math.max(money(req.body.quantity || 1), 1),
       status: "pending",
       notes: assertString(req.body.notes),
     };
@@ -1248,6 +1249,13 @@ app.post("/api/resources/reservations", requireAuth, async (req: AuthedRequest, 
 app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
     const status = ["approved", "completed", "cancelled"].includes(req.body.status) ? req.body.status : "pending";
+
+    const { data: existing } = await supabase
+      .from("resource_reservations")
+      .select("id, status, resource_id, quantity")
+      .eq("id", req.params.id)
+      .maybeSingle();
+
     const { data, error } = await supabase
       .from("resource_reservations")
       .update({ status, approved_by: req.user!.id })
@@ -1255,6 +1263,45 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
       .select("*")
       .single();
     if (error) throw error;
+
+    if (existing) {
+      const qty = money(existing.quantity ?? 1);
+      const resourceId = existing.resource_id;
+      const prevStatus = existing.status;
+
+      if (status === "approved" && prevStatus === "pending") {
+        const { data: resource } = await supabase
+          .from("shared_resources")
+          .select("quantity")
+          .eq("id", resourceId)
+          .maybeSingle();
+        const newQty = Math.max(money(resource?.quantity) - qty, 0);
+        await supabase.from("shared_resources").update({ quantity: newQty }).eq("id", resourceId);
+        await supabase.from("inventory_movements").insert({
+          resource_id: resourceId,
+          type: "out",
+          quantity: qty,
+          responsible_id: req.user!.id,
+          notes: `Prestamo aprobado — Reserva ${req.params.id.slice(0, 8)}`,
+        });
+      } else if (status === "cancelled" && prevStatus === "approved") {
+        const { data: resource } = await supabase
+          .from("shared_resources")
+          .select("quantity")
+          .eq("id", resourceId)
+          .maybeSingle();
+        const newQty = money(resource?.quantity) + qty;
+        await supabase.from("shared_resources").update({ quantity: newQty }).eq("id", resourceId);
+        await supabase.from("inventory_movements").insert({
+          resource_id: resourceId,
+          type: "in",
+          quantity: qty,
+          responsible_id: req.user!.id,
+          notes: `Prestamo cancelado — Reintegro Reserva ${req.params.id.slice(0, 8)}`,
+        });
+      }
+    }
+
     res.json(data);
   } catch (error) {
     next(error);
