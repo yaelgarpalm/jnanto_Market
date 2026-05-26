@@ -95,6 +95,7 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [cooperatives, setCooperatives] = useState<Cooperative[]>([]);
   const [producers, setProducers] = useState<Producer[]>([]);
+  const [adminProfiles, setAdminProfiles] = useState<Profile[]>([]);
   const [resources, setResources] = useState<CommunityResource[]>([]);
   const [reservations, setReservations] = useState<ResourceReservation[]>([]);
   const [fundMovements, setFundMovements] = useState<CommunityFundMovement[]>([]);
@@ -304,6 +305,12 @@ export default function App() {
       setOrders(adminOrderRows);
       setMovements(movementRows);
       setRewardBalance(rewards);
+      if (profileRow.role === "admin") {
+        const adminProfileRows = await api<Profile[]>("/api/admin/profiles");
+        setAdminProfiles(adminProfileRows);
+      } else {
+        setAdminProfiles([]);
+      }
     } catch (error) {
       console.warn(error);
     }
@@ -951,6 +958,39 @@ export default function App() {
     }
   }
 
+  async function deleteAdminProduct(product: Product) {
+    if (!window.confirm(`¿Eliminar "${product.name}"? Si ya tuvo ventas se archivará para conservar las órdenes.`)) return;
+    try {
+      const result = await api<{ archived?: boolean; deleted?: boolean }>(`/api/admin/products/${product.id}`, { method: "DELETE" });
+      setAuthMessage(result.archived ? "Producto archivado porque ya tenía compras registradas." : "Producto eliminado.");
+      await Promise.all([loadPublicData(), loadPrivateData()]);
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo borrar el producto."));
+    }
+  }
+
+  async function deleteAdminProfile(targetProfile: Profile) {
+    if (!window.confirm(`¿Eliminar la cuenta de ${targetProfile.full_name}? Esta acción borra el acceso del usuario.`)) return;
+    try {
+      await api(`/api/admin/profiles/${targetProfile.id}`, { method: "DELETE" });
+      setAuthMessage("Cliente/productor eliminado.");
+      await loadPrivateData();
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo borrar el cliente o productor."));
+    }
+  }
+
+  async function deleteAdminCooperative(cooperative: Cooperative) {
+    if (!window.confirm(`¿Eliminar la cooperativa "${cooperative.name}"?`)) return;
+    try {
+      await api(`/api/admin/cooperatives/${cooperative.id}`, { method: "DELETE" });
+      setAuthMessage("Cooperativa eliminada.");
+      await Promise.all([loadPublicData(), loadPrivateData()]);
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo borrar la cooperativa."));
+    }
+  }
+
   async function anchorProduct(productId: string) {
     const anchor = await api<BlockchainAnchor>(`/api/blockchain/anchor/${productId}`, {
       method: "POST",
@@ -1271,10 +1311,15 @@ export default function App() {
               profile={profile}
               orders={orders}
               products={products}
+              cooperatives={cooperatives}
+              profiles={adminProfiles}
               sensorForm={sensorForm}
               setSensorForm={setSensorForm}
               onSensor={addSensorReading}
               onAnchor={anchorProduct}
+              onDeleteProduct={deleteAdminProduct}
+              onDeleteProfile={deleteAdminProfile}
+              onDeleteCooperative={deleteAdminCooperative}
             />
           )}
         </section>

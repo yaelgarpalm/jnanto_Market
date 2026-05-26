@@ -338,6 +338,7 @@ function publicTraceStage(stage: any) {
       ? {
           producerRating: payload.producerRating,
           deliveryRating: payload.deliveryRating,
+          comments: payload.comments,
           rewardPoints: payload.rewardPoints,
         }
       : {};
@@ -691,6 +692,7 @@ app.get("/api/products", async (req, res, next) => {
   try {
     let query = supabase.from("products").select("*, product_images(*)").order("created_at", { ascending: false });
     if (req.query.includePending !== "true") query = query.eq("status", "verified");
+    query = query.neq("status", "archived");
     if (req.query.category && req.query.category !== "Todos") query = query.eq("category", String(req.query.category));
     const { data, error } = await query;
     if (error) throw error;
@@ -808,6 +810,110 @@ app.post("/api/products", requireAuth, requireRoles(["producer", "cooperative", 
       userId: req.user!.id,
     });
     res.status(201).json(mapProduct({ ...data, product_images: images.map((url, index) => ({ url, sort_order: index })) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/profiles", requireAuth, requireRoles(["admin"]), async (_req: AuthedRequest, res, next) => {
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, full_name, email, role, community, cooperative_id, created_at")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.json(data || []);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/products/:id", requireAuth, requireRoles(["admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const { data: product, error: productError } = await supabase
+      .from("products")
+      .select("id")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (productError) throw productError;
+    if (!product) return res.status(404).json({ error: "Producto no encontrado." });
+
+    const { count, error: countError } = await supabase
+      .from("order_items")
+      .select("id", { count: "exact", head: true })
+      .eq("product_id", req.params.id);
+    if (countError) throw countError;
+
+    if ((count || 0) > 0) {
+      const { error } = await supabase
+        .from("products")
+        .update({ status: "archived", stock: 0 })
+        .eq("id", req.params.id);
+      if (error) throw error;
+      return res.json({ success: true, archived: true });
+    }
+
+    const { error } = await supabase.from("products").delete().eq("id", req.params.id);
+    if (error) throw error;
+    res.json({ success: true, deleted: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/profiles/:id", requireAuth, requireRoles(["admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    if (req.params.id === req.user!.id) {
+      return res.status(400).json({ error: "No puedes borrar tu propia cuenta administradora." });
+    }
+
+    await supabase.from("producers").delete().eq("user_id", req.params.id);
+    await supabase.from("producers").delete().eq("id", req.params.id);
+    const { error: profileError } = await supabase.from("profiles").delete().eq("id", req.params.id);
+    if (profileError) throw profileError;
+
+    const { error: authError } = await supabase.auth.admin.deleteUser(req.params.id);
+    if (authError && !/not found|does not exist/i.test(authError.message)) throw authError;
+
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/admin/cooperatives/:id", requireAuth, requireRoles(["admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const { data: cooperative, error: cooperativeError } = await supabase
+      .from("cooperatives")
+      .select("id")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (cooperativeError) throw cooperativeError;
+    if (!cooperative) return res.status(404).json({ error: "Cooperativa no encontrada." });
+
+    const [
+      { count: productCount, error: productError },
+      { count: profileCount, error: profileError },
+      { count: resourceCount, error: resourceError },
+    ] = await Promise.all([
+      supabase.from("products").select("id", { count: "exact", head: true }).eq("cooperative_id", req.params.id).neq("status", "archived"),
+      supabase.from("profiles").select("id", { count: "exact", head: true }).eq("cooperative_id", req.params.id),
+      supabase.from("shared_resources").select("id", { count: "exact", head: true }).eq("cooperative_id", req.params.id),
+    ]);
+    if (productError) throw productError;
+    if (profileError) throw profileError;
+    if (resourceError) throw resourceError;
+
+    const references = Number(productCount || 0) + Number(profileCount || 0) + Number(resourceCount || 0);
+    if (references > 0) {
+      return res.status(409).json({
+        error: "No se puede borrar esta cooperativa porque tiene productos, clientes/productores o recursos asociados. Reasigna o elimina esos registros primero.",
+      });
+    }
+
+    const { error } = await supabase.from("cooperatives").delete().eq("id", req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
   } catch (error) {
     next(error);
   }
@@ -1015,6 +1121,24 @@ app.post("/api/products/:id/confirm-receipt", requireAuth, async (req: AuthedReq
 
     const rewardPoints = Math.max(25, Math.round(money(product.price) * 0.05));
     if (existing) {
+      const nextPayload = {
+        ...(existing.payload || {}),
+        customerId: req.user!.id,
+        producerRating,
+        deliveryRating,
+        comments,
+        rewardPoints,
+      };
+      const { data: updatedStage, error: updateStageError } = await supabase
+        .from("traceability_stages")
+        .update({
+          description: `El cliente actualizó su experiencia de entrega y calificación de esta pieza única.`,
+          payload: nextPayload,
+        })
+        .eq("id", existing.id)
+        .select("*")
+        .single();
+      if (updateStageError) throw updateStageError;
       await grantReward({
         customerId: req.user!.id,
         orderId: order.id,
@@ -1023,7 +1147,7 @@ app.post("/api/products/:id/confirm-receipt", requireAuth, async (req: AuthedReq
         reason: "confirm_receipt",
         payload: { producerRating, deliveryRating },
       });
-      return res.json({ success: true, alreadyConfirmed: true, rewardPoints, stage: existing });
+      return res.json({ success: true, alreadyConfirmed: true, updatedReview: true, rewardPoints, stage: updatedStage });
     }
 
     const { error: updateError } = await supabase

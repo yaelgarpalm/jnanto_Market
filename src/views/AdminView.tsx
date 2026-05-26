@@ -1,25 +1,35 @@
 import React, { FormEvent } from "react";
-import { Gauge, Lock, ShieldCheck } from "lucide-react";
-import { Order, Product, Profile } from "../types";
+import { Building2, Gauge, Lock, Package, ShieldCheck, Trash2, Users } from "lucide-react";
+import { Cooperative, Order, Product, Profile } from "../types";
 
 interface AdminViewProps {
   profile: Profile | null;
   orders: Order[];
   products: Product[];
+  cooperatives: Cooperative[];
+  profiles: Profile[];
   sensorForm: any;
   setSensorForm: React.Dispatch<React.SetStateAction<any>>;
   onSensor: (event: FormEvent) => void;
   onAnchor: (productId: string) => void;
+  onDeleteProduct: (product: Product) => void;
+  onDeleteProfile: (profile: Profile) => void;
+  onDeleteCooperative: (cooperative: Cooperative) => void;
 }
 
 export default function AdminView({
   profile,
   orders,
   products,
+  cooperatives,
+  profiles,
   sensorForm,
   setSensorForm,
   onSensor,
   onAnchor,
+  onDeleteProduct,
+  onDeleteProfile,
+  onDeleteCooperative,
 }: AdminViewProps) {
   const isAdmin = Boolean(profile && profile.role === "admin");
 
@@ -80,6 +90,61 @@ export default function AdminView({
             ))}
           </div>
         </div>
+
+        {isAdmin && (
+          <div className="pt-3 border-t border-[#E6E2DA]">
+            <h3 className="font-serif font-bold text-[#2D2D2A] text-xs mb-3">
+              Administración de registros
+            </h3>
+            <div className="grid gap-3 lg:grid-cols-3">
+              <AdminList
+                title="Productos"
+                icon={<Package className="h-4 w-4 text-[#5A6A42]" />}
+                empty="No hay productos activos."
+              >
+                {products.map((product) => (
+                  <AdminRow
+                    key={product.id}
+                    title={product.name}
+                    meta={`${product.status.toUpperCase()} · ${product.stock} en stock`}
+                    onDelete={() => onDeleteProduct(product)}
+                  />
+                ))}
+              </AdminList>
+
+              <AdminList
+                title="Clientes y usuarios"
+                icon={<Users className="h-4 w-4 text-[#5A6A42]" />}
+                empty="No hay usuarios cargados."
+              >
+                {profiles.map((item) => (
+                  <AdminRow
+                    key={item.id}
+                    title={item.full_name}
+                    meta={`${item.role} · ${item.email}`}
+                    disabled={item.id === profile?.id}
+                    onDelete={() => onDeleteProfile(item)}
+                  />
+                ))}
+              </AdminList>
+
+              <AdminList
+                title="Cooperativas"
+                icon={<Building2 className="h-4 w-4 text-[#5A6A42]" />}
+                empty="No hay cooperativas registradas."
+              >
+                {cooperatives.map((cooperative) => (
+                  <AdminRow
+                    key={cooperative.id}
+                    title={cooperative.name}
+                    meta={`${cooperative.community} · ${cooperative.municipality}`}
+                    onDelete={() => onDeleteCooperative(cooperative)}
+                  />
+                ))}
+              </AdminList>
+            </div>
+          </div>
+        )}
       </div>
 
       <form onSubmit={onSensor} className="rounded-2xl border border-[#E6E2DA] bg-white p-4 text-xs space-y-2 shadow-xs h-fit">
@@ -157,6 +222,62 @@ export default function AdminView({
           Registrar Telemetría
         </button>
       </form>
+    </div>
+  );
+}
+
+function AdminList({
+  title,
+  icon,
+  empty,
+  children,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  empty: string;
+  children: React.ReactNode;
+}) {
+  const rows = React.Children.toArray(children).filter(Boolean);
+  return (
+    <div className="rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3">
+      <div className="mb-2 flex items-center gap-2">
+        {icon}
+        <h4 className="text-xs font-bold text-[#2D2D2A]">{title}</h4>
+      </div>
+      <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+        {rows.length > 0 ? rows : <p className="text-[11px] italic text-[#8A847C]">{empty}</p>}
+      </div>
+    </div>
+  );
+}
+
+function AdminRow({
+  title,
+  meta,
+  disabled,
+  onDelete,
+}: {
+  key?: React.Key;
+  title: string;
+  meta: string;
+  disabled?: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-[#E6E2DA] bg-white px-2.5 py-2">
+      <div className="min-w-0">
+        <p className="truncate text-xs font-bold text-[#2D2D2A]">{title}</p>
+        <p className="truncate text-[10px] text-[#6B665F]">{meta}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onDelete}
+        disabled={disabled}
+        title={disabled ? "No puedes eliminar tu propia cuenta" : "Eliminar"}
+        className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer"
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
     </div>
   );
 }

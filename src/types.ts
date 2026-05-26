@@ -67,7 +67,7 @@ export interface Product {
   image: string;
   images?: string[];
   stock: number;
-  status: "verified" | "pending";
+  status: "verified" | "pending" | "archived";
   traceCode: string;
   breakdown: PriceBreakdown;
   fairTradeBadges: string[];

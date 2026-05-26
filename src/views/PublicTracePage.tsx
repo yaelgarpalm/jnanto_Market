@@ -8,7 +8,7 @@ interface PublicTracePageProps {
   message: string | null;
   profile: Profile | null;
   onBack: () => void;
-  onConfirmReceipt: (productId: string, input: { producerRating: number; deliveryRating: number; comments: string }) => Promise<{ rewardPoints: number; alreadyConfirmed?: boolean }>;
+  onConfirmReceipt: (productId: string, input: { producerRating: number; deliveryRating: number; comments: string }) => Promise<{ rewardPoints: number; alreadyConfirmed?: boolean; updatedReview?: boolean }>;
 }
 
 export default function PublicTracePage({ traceCode, data, message, profile, onBack, onConfirmReceipt }: PublicTracePageProps) {
@@ -35,6 +35,7 @@ export default function PublicTracePage({ traceCode, data, message, profile, onB
   const receivedStage = stages.find((stage) => stage.stage_key === "received");
   const receivedPayload = receivedStage?.payload || {};
   const rewardPoints = typeof receivedPayload.rewardPoints === "number" ? receivedPayload.rewardPoints : null;
+  const canEditReceipt = Boolean(profile && (!receivedPayload.customerId || receivedPayload.customerId === profile.id));
 
   async function handleReceipt(event: FormEvent) {
     event.preventDefault();
@@ -47,8 +48,10 @@ export default function PublicTracePage({ traceCode, data, message, profile, onB
     try {
       const result = await onConfirmReceipt(product.id, { producerRating, deliveryRating, comments });
       setReceiptMessage(
-        result.alreadyConfirmed
-          ? `Esta pieza ya fue confirmada. Recompensa registrada: ${result.rewardPoints} puntos.`
+        result.updatedReview
+          ? `Reseña actualizada. Recompensa registrada: ${result.rewardPoints} puntos.`
+          : result.alreadyConfirmed
+            ? `Esta pieza ya fue confirmada. Recompensa registrada: ${result.rewardPoints} puntos.`
           : `Recibido confirmado. Ganaste ${result.rewardPoints} puntos Jñatjo.`,
       );
     } catch (error) {
@@ -122,13 +125,18 @@ export default function PublicTracePage({ traceCode, data, message, profile, onB
             </div>
           </div>
 
-          {receivedStage ? (
+          {receivedStage && !canEditReceipt ? (
             <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-[#5A6A42]">
               <p className="font-bold">Recibido confirmado.</p>
               <p className="mt-1">Recompensa registrada: {rewardPoints ?? "varios"} puntos Jñatjo.</p>
             </div>
           ) : (
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {receivedStage && (
+                <p className="sm:col-span-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-bold text-[#5A6A42]">
+                  Ya confirmaste recibido. Puedes actualizar tu calificación de productor y entrega.
+                </p>
+              )}
               <RatingField label="Productor" value={producerRating} onChange={setProducerRating} />
               <RatingField label="Entrega" value={deliveryRating} onChange={setDeliveryRating} />
               <label className="sm:col-span-2 block text-[10px] font-bold uppercase tracking-widest text-[#6B665F]">
@@ -146,7 +154,7 @@ export default function PublicTracePage({ traceCode, data, message, profile, onB
                 disabled={submitting}
                 className="sm:col-span-2 rounded-xl bg-[#2D2D2A] px-4 py-2.5 text-xs font-bold uppercase text-white transition-colors hover:bg-[#5A6A42] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
               >
-                {submitting ? "Confirmando..." : "Confirmar recibido"}
+                {submitting ? "Guardando..." : receivedStage ? "Actualizar reseña" : "Confirmar recibido"}
               </button>
             </div>
           )}
