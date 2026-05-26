@@ -1,5 +1,6 @@
 import { app } from "../../src/server";
-import { handler as netlifyHandler } from "@netlify/functions";
+import serverless from "serverless-http";
 
-export const handler = netlifyHandler({ app });
+export const handler = serverless(app);
+
 
