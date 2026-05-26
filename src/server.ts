@@ -16,10 +16,9 @@ dotenv.config({ path: ".env.local" });
 dotenv.config();
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
 const PROJECT_URL = process.env.VITE_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SECRET_KEY;
-const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
+const APP_URL = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL;

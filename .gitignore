@@ -21,3 +21,6 @@ qa-*.png
 Thumbs.db
 .idea/
 .vscode/
+
+# Local Netlify folder
+.netlify

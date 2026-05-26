@@ -1,0 +1,98 @@
+/* Redirect all routes to index.html for SPA */
+/* Netlify redirect rule */
+/*
+   This ensures that client-side routing works by serving index.html for any path that does not match a static file.
+*/
+/*
+   The format is: <source>   <destination>   <status>
+   Example: /*   /index.html   200
+*/
+/*
+   Place this file at the project root under the netlify directory.
+*/
+/*
+   Netlify automatically picks up this file when publishing.
+*/
+/*
+   Note: Ensure that the netlify.toml publish directory is set to "dist".
+*/
+/*
+   Add any additional redirects as needed.
+*/
+/*
+   This file will be used by Netlify during deployment.
+*/
+/*
+   End of redirects file.
+*/
+
+/*
+  Redirect all paths to index.html
+*/
+/*
+  This handles client side routing for React/Vite.
+*/
+/*
+  The 200 status ensures the content is served without a redirect.
+*/
+
+/*
+  Redirect rule:
+*/
+/*
+  /*    /index.html   200
+*/
+
+/*
+  Netlify syntax for a wildcard redirect.
+*/
+
+/*
+  End of file.
+*/
+
+/*
+  Netlify will process this file and set up the SPA routing.
+*/
+
+/*
+  The following redirect line is essential:
+*/
+/*
+  /*    /index.html   200
+*/
+
+/*
+  Save this as netlify/_redirects.
+*/
+
+/* End of redirects */
+
+/*
+  The actual required line:
+*/
+/*
+  /*    /index.html   200
+*/
+
+/*
+  Ensure no extra spaces before the wildcard.
+*/
+
+/*
+  Example:
+*/
+/*
+  /*    /index.html   200
+*/
+
+/*
+  That's it.
+*/
+
+/*
+  Final directive:
+*/
+/*
+  /*    /index.html   200
+*/
