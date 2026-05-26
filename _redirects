@@ -1,20 +1,2 @@
-/* Redirect all routes to index.html for SPA */
-/*
-   This ensures that client-side routing works by serving index.html for any path that does not match a static file.
-*/
-/*
-   The format is: <source>   <destination>   <status>
-   Example: /*   /index.html   200
-*/
-/*
-   Place this file at the project root.
-*/
-/*
-   Netlify automatically picks up this file when publishing.
-*/
-/*
-   The essential redirect line:
-*/
-/*
-   /*    /index.html   200
-*/
+/*   /index.html   200
+/api/*   /.netlify/functions/server   200
