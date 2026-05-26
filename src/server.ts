@@ -170,18 +170,27 @@ function requireRoles(roles: ProfileRole[]) {
   };
 }
 
-function safeReturnOrigin(value: unknown): string {
+function requestOrigin(req: Request): string | null {
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || req.protocol || "http";
+  const host = req.get("host");
+  return host ? `${protocol}://${host}` : null;
+}
+
+function safeReturnOrigin(value: unknown, req?: Request): string {
   const fallback = APP_URL.replace(/\/$/, "");
   if (typeof value !== "string") return fallback;
   try {
     const origin = new URL(value).origin;
     const fallbackOrigin = new URL(fallback).origin;
+    const currentOrigin = req ? requestOrigin(req) : null;
     const parsed = new URL(origin);
     const isLocalNetwork =
       parsed.protocol === "http:" &&
       /^(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)$/.test(parsed.hostname);
     const allowedLocalOrigins = new Set([
       fallbackOrigin,
+      currentOrigin,
       "http://localhost:3000",
       "http://127.0.0.1:3000",
     ]);
@@ -1131,7 +1140,7 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
     if (!stripe) return res.status(503).json({ error: "Configura STRIPE_SECRET_KEY para activar checkout real." });
     const items = Array.isArray(req.body.items) ? req.body.items : [];
     if (items.length === 0) return res.status(400).json({ error: "El carrito esta vacio." });
-    const returnOrigin = safeReturnOrigin(req.body.returnOrigin);
+    const returnOrigin = safeReturnOrigin(req.body.returnOrigin, req);
     const shipping = req.body.shipping || {};
     const shippingName = assertString(shipping.name, req.profile!.full_name);
     const shippingPhone = assertString(shipping.phone);

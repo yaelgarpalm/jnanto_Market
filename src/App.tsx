@@ -55,7 +55,7 @@ function getFriendlyError(error: unknown, fallback: string) {
     return "Supabase limitó temporalmente la autenticación. Espera un momento e intenta iniciar sesión otra vez.";
   }
   if (/failed to fetch|network/i.test(error.message)) {
-    return "No se pudo conectar con el servidor. Verifica que el backend esté corriendo en http://localhost:3000.";
+    return `No se pudo conectar con el servidor. Verifica que ${window.location.origin} esté activo.`;
   }
   return error.message || fallback;
 }
@@ -650,32 +650,37 @@ export default function App() {
   }
 
   async function startCheckout() {
-    if (!session) {
-      setAuthMessage("Por favor, inicia sesión para poder realizar el pago con Stripe.");
-      return;
+    try {
+      if (!session) {
+        setAuthMessage("Por favor, inicia sesión para poder realizar el pago con Stripe.");
+        return;
+      }
+      if (!canShop) {
+        setAuthMessage("Cambia tu perfil a Cliente si necesitas hacer una compra.");
+        return;
+      }
+      if (!shippingForm.name || !shippingForm.phone || !shippingForm.address || !shippingForm.city || !shippingForm.state || !shippingForm.postalCode) {
+        setAuthMessage("Completa tus datos de entrega antes de proceder al pago.");
+        return;
+      }
+      if (saveDeliveryInfo) {
+        localStorage.setItem(shippingStorageKey, JSON.stringify(shippingForm));
+      } else {
+        localStorage.removeItem(shippingStorageKey);
+      }
+      setAuthMessage("Creando sesión segura de pago en Stripe...");
+      const response = await api<{ url: string }>("/api/checkout/session", {
+        method: "POST",
+        body: JSON.stringify({
+          items: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
+          shipping: shippingForm,
+          returnOrigin: window.location.origin,
+        }),
+      });
+      window.location.href = response.url;
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo iniciar el pago con Stripe."));
     }
-    if (!canShop) {
-      setAuthMessage("Cambia tu perfil a Cliente si necesitas hacer una compra.");
-      return;
-    }
-    if (!shippingForm.name || !shippingForm.phone || !shippingForm.address || !shippingForm.city || !shippingForm.state || !shippingForm.postalCode) {
-      setAuthMessage("Completa tus datos de entrega antes de proceder al pago.");
-      return;
-    }
-    if (saveDeliveryInfo) {
-      localStorage.setItem(shippingStorageKey, JSON.stringify(shippingForm));
-    } else {
-      localStorage.removeItem(shippingStorageKey);
-    }
-    const response = await api<{ url: string }>("/api/checkout/session", {
-      method: "POST",
-      body: JSON.stringify({
-        items: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
-        shipping: shippingForm,
-        returnOrigin: window.location.origin,
-      }),
-    });
-    window.location.href = response.url;
   }
 
   async function openTrace(product: Product) {
@@ -777,8 +782,13 @@ export default function App() {
   }
 
   async function validateProduct(productId: string) {
-    await api(`/api/products/${productId}/validate`, { method: "POST", body: JSON.stringify({}) });
-    await loadPublicData();
+    try {
+      await api(`/api/products/${productId}/validate`, { method: "POST", body: JSON.stringify({}) });
+      setAuthMessage("Origen y comercio justo validados correctamente.");
+      await loadPublicData();
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo validar el origen del producto."));
+    }
   }
 
   async function anchorProduct(productId: string) {

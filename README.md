@@ -114,7 +114,7 @@ Este repositorio esta listo para desplegarse como Web Service de Node con Bluepr
 3. Elige el repositorio.
 4. Render detectara `render.yaml` y creara el servicio `jnatjo-market`.
 5. Completa las variables marcadas como `sync: false`.
-6. Usa `APP_URL=https://tu-servicio.onrender.com`.
+6. Usa `APP_URL=https://jnanto-market.onrender.com`.
 
 Valores usados por Render:
 

@@ -23,7 +23,7 @@ NODE_ENV=production
 VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 SUPABASE_SECRET_KEY=sb_secret_...
-APP_URL=https://tu-servicio.onrender.com
+APP_URL=https://jnanto-market.onrender.com
 ```
 
 ## Variables opcionales
