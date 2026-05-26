@@ -748,6 +748,30 @@ export default function App() {
     setAnchors(trace.anchors);
   }
 
+  async function downloadProductQr(product: Product, orderId?: string) {
+    const response = await fetch(`/api/products/${product.id}/qr.png`);
+    if (!response.ok) {
+      setAuthMessage("No se pudo generar el QR de trazabilidad.");
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = product.name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase();
+    link.href = url;
+    link.download = `qr-${safeName || "producto"}-${orderId ? orderId.slice(0, 8) : product.traceCode}.png`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setAuthMessage("QR descargado como imagen PNG.");
+  }
+
   async function createProduct(event: FormEvent) {
     event.preventDefault();
     const materialsCost = (productForm.materialItems || []).reduce((sum: number, item: MaterialItem) => sum + Number(item.cost || 0), 0);
@@ -1090,6 +1114,7 @@ export default function App() {
               onTrace={openTrace}
               onRestock={restockProduct}
               onImageUpload={uploadProductImages}
+              onDownloadQr={downloadProductQr}
             />
           )}
 
@@ -1103,6 +1128,7 @@ export default function App() {
               onFulfillment={updateOrderFulfillment}
               orders={orders}
               onTrace={openTrace}
+              onDownloadQr={downloadProductQr}
             />
           )}
 

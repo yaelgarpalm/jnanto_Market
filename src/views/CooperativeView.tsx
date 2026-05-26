@@ -1,5 +1,5 @@
 import React from "react";
-import { CheckCircle2, PackageCheck, ShieldAlert } from "lucide-react";
+import { CheckCircle2, Download, PackageCheck, QrCode, ShieldAlert } from "lucide-react";
 import { Order, Product, Profile, ResourceReservation } from "../types";
 
 interface CooperativeViewProps {
@@ -11,6 +11,7 @@ interface CooperativeViewProps {
   onReservation: (id: string, status: "approved" | "completed" | "cancelled") => void;
   onFulfillment: (id: string, status: "preparing" | "shipped" | "delivered" | "cancelled") => void;
   onTrace: (product: Product) => void;
+  onDownloadQr: (product: Product, orderId?: string) => void;
 }
 
 export default function CooperativeView({
@@ -22,6 +23,7 @@ export default function CooperativeView({
   onReservation,
   onFulfillment,
   onTrace,
+  onDownloadQr,
 }: CooperativeViewProps) {
   const isCoopOrStaff = Boolean(profile && ["cooperative", "verifier", "inventory_manager", "admin"].includes(profile.role));
   const pending = products.filter((item) => item.status === "pending");
@@ -120,10 +122,23 @@ export default function CooperativeView({
                   </div>
                   <div className="mt-2 text-[10px] text-[#6B665F]">
                     {(order.order_items || []).map((item) => (
-                      <p key={item.id}>
-                        {item.quantity} x {item.product_name}
-                        {item.review?.deliveryRating ? ` · Entrega ${item.review.deliveryRating}★` : ""}
-                      </p>
+                      <div key={item.id} className="mt-1 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/70 px-2 py-1.5">
+                        <p>
+                          {item.quantity} x {item.product_name}
+                          {item.review?.deliveryRating ? ` · Entrega ${item.review.deliveryRating}★` : ""}
+                        </p>
+                        {item.product && (
+                          <button
+                            type="button"
+                            onClick={() => onDownloadQr(item.product!, order.id)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#2D2D2A] px-2.5 py-1 text-[9px] font-bold uppercase text-white hover:bg-[#5A6A42] cursor-pointer"
+                          >
+                            <QrCode className="h-3 w-3" />
+                            Generar QR
+                            <Download className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[#E6E2DA]/50 pt-2">

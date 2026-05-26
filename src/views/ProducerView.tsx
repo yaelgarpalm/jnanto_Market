@@ -1,5 +1,5 @@
 import React, { FormEvent } from "react";
-import { ImageUp, PackageCheck, Plus, ReceiptText, Trash2 } from "lucide-react";
+import { Download, ImageUp, PackageCheck, Plus, QrCode, ReceiptText, Trash2 } from "lucide-react";
 import { MaterialItem, Order, Producer, Product, Profile } from "../types";
 
 interface ProducerViewProps {
@@ -13,6 +13,7 @@ interface ProducerViewProps {
   onTrace: (product: Product) => void;
   onRestock: (productId: string, amount: number) => void;
   onImageUpload: (files: File[]) => void;
+  onDownloadQr: (product: Product, orderId?: string) => void;
 }
 
 const categories = [
@@ -45,6 +46,7 @@ export default function ProducerView({
   onTrace,
   onRestock,
   onImageUpload,
+  onDownloadQr,
 }: ProducerViewProps) {
   const isProducerOrStaff = Boolean(profile && ["producer", "cooperative", "admin"].includes(profile.role));
   const isProducer = profile?.role === "producer";
@@ -60,7 +62,7 @@ export default function ProducerView({
     (order.order_items || []).map((item) => ({
       order,
       item,
-      product: productById.get(item.product_id),
+      product: item.product || productById.get(item.product_id),
     })),
   );
   const materialItems: MaterialItem[] = Array.isArray(productForm.materialItems) ? productForm.materialItems : [];
@@ -485,16 +487,29 @@ export default function ProducerView({
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-2">
                     <span className="font-bold text-[#5A6A42]">${item.producer_pay.toLocaleString("es-MX")} MXN</span>
-                    {product && (
-                      <button
-                        type="button"
-                        onClick={() => onTrace(product)}
-                        className="inline-flex items-center gap-1 rounded-lg border border-[#E6E2DA] bg-white px-2.5 py-1.5 text-[9px] font-bold uppercase text-[#2D2D2A] hover:bg-[#FAF8F5] cursor-pointer"
-                      >
-                        <PackageCheck className="h-3 w-3" />
-                        Trazabilidad
-                      </button>
-                    )}
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {product && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => onTrace(product)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-[#E6E2DA] bg-white px-2.5 py-1.5 text-[9px] font-bold uppercase text-[#2D2D2A] hover:bg-[#FAF8F5] cursor-pointer"
+                          >
+                            <PackageCheck className="h-3 w-3" />
+                            Trazabilidad
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDownloadQr(product, order.id)}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#2D2D2A] px-2.5 py-1.5 text-[9px] font-bold uppercase text-white hover:bg-[#5A6A42] cursor-pointer"
+                          >
+                            <QrCode className="h-3 w-3" />
+                            Generar QR
+                            <Download className="h-3 w-3" />
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))

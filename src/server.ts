@@ -903,6 +903,39 @@ app.get("/api/products/:id/qr", async (req, res, next) => {
   }
 });
 
+app.get("/api/products/:id/qr.png", async (req, res, next) => {
+  try {
+    const { data: product, error } = await supabase
+      .from("products")
+      .select("name, trace_code")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!product) return res.status(404).json({ error: "Producto no encontrado." });
+    const url = traceUrlFromRequest(req, product.trace_code);
+    const buffer = await QRCode.toBuffer(url, {
+      errorCorrectionLevel: "H",
+      margin: 2,
+      width: 900,
+      color: {
+        dark: "#101815",
+        light: "#FFFFFF",
+      },
+    });
+    const safeName = assertString(product.name, "producto")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase();
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", `attachment; filename=\"qr-${safeName || "producto"}-${product.trace_code}.png\"`);
+    res.send(buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/products/:id/confirm-receipt", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const producerRating = Math.min(Math.max(Number(req.body.producerRating || 5), 1), 5);
