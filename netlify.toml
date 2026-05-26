@@ -5,6 +5,13 @@
 [functions]
   directory = "netlify/functions"
 
+# Route all API calls to the serverless Express function
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/server/api/:splat"
+  status = 200
+
+# SPA fallback — everything else serves index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"
