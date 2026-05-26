@@ -15,7 +15,7 @@ import { privateKeyToAccount } from "viem/accounts";
 dotenv.config({ path: ".env.local" });
 dotenv.config();
 
-const app = express();
+export const app = express();
 const PROJECT_URL = process.env.VITE_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SECRET_KEY;
 const APP_URL = process.env.APP_URL || `http://localhost:${process.env.PORT || 3000}`;
