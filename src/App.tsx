@@ -595,6 +595,34 @@ export default function App() {
         }));
     }
 
+    if (profile.role === "producer") {
+      salesOrders
+        .flatMap((order) =>
+          (order.order_items || []).map((item) => ({
+            order,
+            item,
+          })),
+        )
+        .filter(({ order, item }) => {
+          const product = products.find((candidate) => candidate.id === item.product_id);
+          const isOwnProduct =
+            product?.producerId === profile.id ||
+            normalizeText(product?.producerName) === normalizeText(profile.full_name);
+          return isOwnProduct && ["paid", "shipped", "delivered"].includes(order.status);
+        })
+        .slice(0, 5)
+        .forEach(({ order, item }) => {
+          items.push({
+            id: `sale:${order.id}:${item.product_id}:${order.status}`,
+            title: "Nueva venta confirmada",
+            body: `${item.quantity} x ${item.product_name} en orden ${order.id.slice(0, 8).toUpperCase()}.`,
+            actionLabel: "Ver ventas",
+            action: "openProducer",
+            productId: item.product_id,
+          });
+        });
+    }
+
     if (["cooperative", "verifier", "admin"].includes(profile.role)) {
       products
         .filter((product) => product.status === "pending")
@@ -642,7 +670,7 @@ export default function App() {
     }
 
     return items.filter((item) => !dismissedNotificationIds.includes(item.id));
-  }, [dismissedNotificationIds, products, profile, purchaseOrders]);
+  }, [dismissedNotificationIds, products, profile, purchaseOrders, salesOrders]);
 
   function addToCart(product: Product) {
     if (!canShop) {
