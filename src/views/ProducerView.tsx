@@ -93,7 +93,7 @@ export default function ProducerView({
   function addMaterial() {
     setProductForm((prev: any) => ({
       ...prev,
-      materialItems: [...(Array.isArray(prev.materialItems) ? prev.materialItems : []), { name: "", cost: 0 }],
+      materialItems: [...(Array.isArray(prev.materialItems) ? prev.materialItems : []), { name: "", cost: "" }],
     }));
   }
 
@@ -160,9 +160,11 @@ export default function ProducerView({
             <input
               type="number"
               required
+              min="1"
               value={productForm.price}
-              onChange={(e) => setProductForm((p: any) => ({ ...p, price: Number(e.target.value) }))}
+              onChange={(e) => setProductForm((p: any) => ({ ...p, price: e.target.value }))}
               className="mt-1 w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
+              placeholder="Ej. 850"
             />
           </label>
 
@@ -171,9 +173,11 @@ export default function ProducerView({
             <input
               type="number"
               required
+              min="1"
               value={productForm.craftHours}
-              onChange={(e) => setProductForm((p: any) => ({ ...p, craftHours: Number(e.target.value) }))}
+              onChange={(e) => setProductForm((p: any) => ({ ...p, craftHours: e.target.value }))}
               className="mt-1 w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
+              placeholder="Ej. 40"
             />
           </label>
 
@@ -202,9 +206,9 @@ export default function ProducerView({
                     type="number"
                     min="0"
                     value={item.cost}
-                    onChange={(e) => updateMaterial(index, { cost: Number(e.target.value) })}
+                    onChange={(e) => updateMaterial(index, { cost: e.target.value as any })}
                     className="rounded-lg border border-[#E6E2DA] bg-white px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
-                    placeholder="Costo"
+                    placeholder="Ej. 80"
                   />
                   <button
                     type="button"
@@ -261,8 +265,10 @@ export default function ProducerView({
             <input
               type="number"
               value={productForm.communityFund}
-              onChange={(e) => setProductForm((p: any) => ({ ...p, communityFund: Number(e.target.value) }))}
+              min="0"
+              onChange={(e) => setProductForm((p: any) => ({ ...p, communityFund: e.target.value }))}
               className="mt-1 w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
+              placeholder="Ej. 85"
             />
           </label>
 
@@ -278,8 +284,10 @@ export default function ProducerView({
             <input
               type="number"
               value={productForm.stock}
-              onChange={(e) => setProductForm((p: any) => ({ ...p, stock: Number(e.target.value) }))}
+              min="0"
+              onChange={(e) => setProductForm((p: any) => ({ ...p, stock: e.target.value }))}
               className="mt-1 w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
+              placeholder="Ej. 3"
             />
           </label>
 
