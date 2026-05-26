@@ -48,6 +48,13 @@ type AppNotification = NavNotification & {
   action: "restock" | "openPurchases" | "openCooperative" | "openProducer";
   productId?: string;
 };
+type RewardBalance = {
+  earnedPoints: number;
+  redeemedPoints: number;
+  availablePoints: number;
+  mxnPerPoint: number;
+  maxCheckoutPercent: number;
+};
 
 function getFriendlyError(error: unknown, fallback: string) {
   if (!(error instanceof Error)) return fallback;
@@ -180,6 +187,14 @@ export default function App() {
     cooperativeId: "coop-1",
   };
   const [saveDeliveryInfo, setSaveDeliveryInfo] = useState(false);
+  const [rewardBalance, setRewardBalance] = useState<RewardBalance>({
+    earnedPoints: 0,
+    redeemedPoints: 0,
+    availablePoints: 0,
+    mxnPerPoint: 1,
+    maxCheckoutPercent: 20,
+  });
+  const [useRewardPoints, setUseRewardPoints] = useState(false);
   const [cartHydrated, setCartHydrated] = useState(false);
   const activeUserKey = session?.user.id || "guest";
   const cartStorageKey = `jnatjo-cart:${activeUserKey}`;
@@ -272,13 +287,14 @@ export default function App() {
   async function loadPrivateData() {
     if (!session) return;
     try {
-      const [profileRow, reservationRows, purchaseRows, salesRows, adminOrderRows, movementRows] = await Promise.all([
+      const [profileRow, reservationRows, purchaseRows, salesRows, adminOrderRows, movementRows, rewards] = await Promise.all([
         api<Profile>("/api/auth/profile"),
         api<ResourceReservation[]>("/api/resources/reservations"),
         api<Order[]>("/api/orders?scope=purchases"),
         api<Order[]>("/api/orders?scope=sales"),
         api<Order[]>("/api/orders?scope=operations"),
         api<any[]>("/api/resources/movements"),
+        api<RewardBalance>("/api/rewards/balance"),
       ]);
       setProfile(profileRow);
       setReservations(reservationRows);
@@ -286,6 +302,7 @@ export default function App() {
       setSalesOrders(salesRows);
       setOrders(adminOrderRows);
       setMovements(movementRows);
+      setRewardBalance(rewards);
     } catch (error) {
       console.warn(error);
     }
@@ -550,6 +567,12 @@ export default function App() {
 
   const cartTotal = cart.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const rewardDiscount = useRewardPoints
+    ? Math.min(
+        rewardBalance.availablePoints,
+        Math.floor(cartTotal * (rewardBalance.maxCheckoutPercent / 100)),
+      )
+    : 0;
   const canShop = !profile || profile.role === "customer";
   const notificationItems = useMemo<AppNotification[]>(() => {
     if (!profile) return [];
@@ -673,6 +696,7 @@ export default function App() {
           items: cart.map((item) => ({ productId: item.product.id, quantity: item.quantity })),
           shipping: shippingForm,
           returnOrigin: window.location.origin,
+          redeemPoints: rewardDiscount,
         }),
       });
       window.location.href = response.url;
@@ -1003,6 +1027,10 @@ export default function App() {
                   setShippingForm={setShippingForm}
                   saveDeliveryInfo={saveDeliveryInfo}
                   setSaveDeliveryInfo={setSaveDeliveryInfo}
+                  rewardBalance={rewardBalance.availablePoints}
+                  rewardDiscount={rewardDiscount}
+                  useRewardPoints={useRewardPoints}
+                  setUseRewardPoints={setUseRewardPoints}
                   onCheckout={startCheckout}
                 />
               ) : (

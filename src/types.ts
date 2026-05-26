@@ -124,6 +124,8 @@ export interface Order {
   created_at: string;
   order_items?: OrderItem[];
   reward_points?: number;
+  reward_points_redeemed?: number;
+  reward_discount?: number;
 }
 
 export interface OrderItem {
@@ -142,6 +144,7 @@ export interface OrderItem {
     rewardPoints?: number;
   } | null;
   rewardPoints?: number;
+  product?: Product | null;
 }
 
 export interface CommunityResource {

@@ -104,6 +104,18 @@ create table if not exists public.customer_rewards (
   unique (customer_id, order_id, product_id, reason)
 );
 
+create table if not exists public.customer_reward_redemptions (
+  id uuid primary key default gen_random_uuid(),
+  customer_id uuid references auth.users(id) on delete cascade,
+  order_id uuid references public.orders(id) on delete cascade,
+  points int not null check (points > 0),
+  discount_amount numeric not null check (discount_amount > 0),
+  currency text not null default 'mxn',
+  reason text not null default 'checkout_discount',
+  created_at timestamptz not null default now(),
+  unique (order_id)
+);
+
 create table if not exists public.community_fund_movements (
   id uuid primary key default gen_random_uuid(),
   type text not null check (type in ('income', 'expense')),

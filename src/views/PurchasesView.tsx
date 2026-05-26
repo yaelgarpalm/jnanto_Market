@@ -14,6 +14,7 @@ export default function PurchasesView({ profile, orders, products, onTrace }: Pu
   const totalPoints = orders.reduce((sum, order) => sum + Number(order.reward_points || 0), 0);
   const statusLabel: Record<string, string> = {
     pending: "Pendiente",
+    paid: "Pagado",
     preparing: "Preparando",
     shipped: "En camino",
     delivered: "Entregado",
@@ -53,16 +54,21 @@ export default function PurchasesView({ profile, orders, products, onTrace }: Pu
         <div className="grid gap-4">
           {orders.map((order) => (
             <article key={order.id} className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
+              {(() => {
+                const fulfillment = order.fulfillment_status || "pending";
+                const visibleStatus = fulfillment === "delivered" || order.status === "delivered" ? "delivered" : order.status;
+                return (
+                  <>
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-[#8A847C]">
                     Orden #{order.id.slice(0, 8).toUpperCase()}
                   </p>
                   <h3 className="mt-1 font-serif text-base font-bold text-[#2D2D2A]">
-                    {(order.fulfillment_status || "pending") === "delivered" ? "Compra entregada" : order.status === "paid" ? "Compra confirmada" : "Compra en proceso"}
+                    {visibleStatus === "delivered" ? "Compra entregada" : order.status === "paid" ? "Compra confirmada" : "Compra en proceso"}
                   </h3>
                   <p className="mt-1 text-[11px] text-[#6B665F]">
-                    Entrega: <span className="font-bold uppercase">{statusLabel[order.fulfillment_status || "pending"] || order.fulfillment_status || "Pendiente"}</span>
+                    Entrega: <span className="font-bold uppercase">{statusLabel[fulfillment] || fulfillment || "Pendiente"}</span>
                     {order.shipping_city ? ` · ${order.shipping_city}, ${order.shipping_state}` : ""}
                   </p>
                   {Number(order.reward_points || 0) > 0 && (
@@ -70,20 +76,28 @@ export default function PurchasesView({ profile, orders, products, onTrace }: Pu
                       Recompensas de esta orden: {order.reward_points} puntos
                     </p>
                   )}
+                  {Number(order.reward_points_redeemed || 0) > 0 && (
+                    <p className="mt-1 text-[11px] font-bold text-[#C2845D]">
+                      Usaste {order.reward_points_redeemed} puntos: -${Number(order.reward_discount || 0).toLocaleString("es-MX")} MXN
+                    </p>
+                  )}
                 </div>
                 <div className="text-right text-xs">
                   <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${
-                    order.status === "paid" ? "bg-emerald-50 text-[#5A6A42]" : "bg-orange-50 text-[#C2845D]"
+                    visibleStatus === "paid" || visibleStatus === "delivered" ? "bg-emerald-50 text-[#5A6A42]" : "bg-orange-50 text-[#C2845D]"
                   }`}>
-                    {order.status}
+                    {statusLabel[visibleStatus] || visibleStatus}
                   </span>
                   <p className="mt-1 font-bold text-[#2D2D2A]">${order.subtotal.toLocaleString("es-MX")} MXN</p>
                 </div>
               </div>
+                  </>
+                );
+              })()}
 
               <div className="grid gap-2">
                 {(order.order_items || []).map((item) => {
-                  const product = productById.get(item.product_id);
+                  const product = item.product || productById.get(item.product_id);
                   return (
                     <div key={item.id} className="rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3 text-xs">
                       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -102,7 +116,7 @@ export default function PurchasesView({ profile, orders, products, onTrace }: Pu
                             </p>
                           ) : null)}
                         </div>
-                        {product && order.status === "paid" ? (
+                        {product && ["paid", "shipped", "delivered"].includes(order.status) ? (
                           <button
                             type="button"
                             onClick={() => onTrace(product)}

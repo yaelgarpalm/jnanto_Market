@@ -277,6 +277,59 @@ async function grantReward(input: {
   if (error && error.code !== "42P01") throw error;
 }
 
+async function getRewardSummary(customerId: string) {
+  let earned = 0;
+  let redeemed = 0;
+
+  const { data: rewards, error: rewardsError } = await supabase
+    .from("customer_rewards")
+    .select("points")
+    .eq("customer_id", customerId);
+  if (rewardsError && rewardsError.code !== "42P01") throw rewardsError;
+  earned = (rewards || []).reduce((sum: number, row: any) => sum + Number(row.points || 0), 0);
+
+  if (rewardsError?.code === "42P01" || earned === 0) {
+    const { data: stages, error: stagesError } = await supabase
+      .from("traceability_stages")
+      .select("payload")
+      .eq("stage_key", "received")
+      .contains("payload", { customerId });
+    if (stagesError) throw stagesError;
+    earned = (stages || []).reduce((sum: number, stage: any) => sum + Number(stage.payload?.rewardPoints || 0), 0);
+  }
+
+  const { data: redemptions, error: redemptionsError } = await supabase
+    .from("customer_reward_redemptions")
+    .select("points")
+    .eq("customer_id", customerId);
+  if (redemptionsError && redemptionsError.code !== "42P01") throw redemptionsError;
+  redeemed = (redemptions || []).reduce((sum: number, row: any) => sum + Number(row.points || 0), 0);
+
+  return {
+    earned,
+    redeemed,
+    available: Math.max(earned - redeemed, 0),
+  };
+}
+
+async function redeemReward(input: {
+  customerId: string;
+  orderId: string;
+  points: number;
+  discountAmount: number;
+}) {
+  const { error } = await supabase.from("customer_reward_redemptions").insert({
+    customer_id: input.customerId,
+    order_id: input.orderId,
+    points: input.points,
+    discount_amount: input.discountAmount,
+  });
+  if (error?.code === "42P01") {
+    throw new Error("Falta crear la tabla customer_reward_redemptions en Supabase para usar puntos como descuento.");
+  }
+  if (error) throw error;
+}
+
 function publicTraceStage(stage: any) {
   if (!stage) return stage;
   const payload = stage.payload || {};
@@ -1150,6 +1203,21 @@ app.get("/api/community-fund", async (_req, res, next) => {
   }
 });
 
+app.get("/api/rewards/balance", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const summary = await getRewardSummary(req.user!.id);
+    res.json({
+      earnedPoints: summary.earned,
+      redeemedPoints: summary.redeemed,
+      availablePoints: summary.available,
+      mxnPerPoint: 1,
+      maxCheckoutPercent: 20,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/community-fund/expense", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
     const { data, error } = await supabase
@@ -1224,6 +1292,12 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
         platform_commission: platformCommission,
       };
     });
+    const requestedRewardPoints = Math.max(Math.floor(money(req.body.redeemPoints)), 0);
+    const rewardSummary = requestedRewardPoints > 0 ? await getRewardSummary(req.user!.id) : { available: 0 };
+    const maxRewardDiscount = Math.max(Math.floor(subtotal * 0.2), 0);
+    const rewardPointsToRedeem = Math.min(requestedRewardPoints, rewardSummary.available, maxRewardDiscount);
+    const rewardDiscount = rewardPointsToRedeem;
+    const checkoutTotal = Math.max(subtotal - rewardDiscount, 1);
 
     const { data: order, error: orderError } = await supabase
       .from("orders")
@@ -1232,7 +1306,7 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
         customer_email: req.profile!.email,
         customer_name: req.profile!.full_name,
         status: "pending",
-        subtotal,
+        subtotal: checkoutTotal,
         producer_total: producerTotal,
         community_fund_total: fundTotal,
         platform_commission_total: platformTotal,
@@ -1253,6 +1327,24 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
     const { error: itemError } = await supabase.from("order_items").insert(rows);
     if (itemError) throw itemError;
 
+    if (rewardPointsToRedeem > 0) {
+      await redeemReward({
+        customerId: req.user!.id,
+        orderId: order.id,
+        points: rewardPointsToRedeem,
+        discountAmount: rewardDiscount,
+      });
+    }
+
+    const coupon = rewardDiscount > 0
+      ? await stripe.coupons.create({
+          amount_off: Math.round(rewardDiscount * 100),
+          currency: "mxn",
+          duration: "once",
+          name: `Puntos Jnatjo - $${rewardDiscount} MXN`,
+        })
+      : null;
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       customer_email: req.profile!.email,
@@ -1266,6 +1358,7 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
           },
         },
       })),
+      discounts: coupon ? [{ coupon: coupon.id }] : undefined,
       metadata: { orderId: order.id },
       success_url: `${returnOrigin}/?checkout=success&order=${order.id}`,
       cancel_url: `${returnOrigin}/?checkout=cancelled&order=${order.id}`,
@@ -1390,9 +1483,14 @@ app.get("/api/orders", requireAuth, async (req: AuthedRequest, res, next) => {
     async function attachRewards(rows: any[]) {
       const orderIds = rows.map((order: any) => order.id);
       if (orderIds.length === 0) return rows;
+      const productIds = Array.from(
+        new Set(rows.flatMap((order: any) => (order.order_items || []).map((item: any) => item.product_id))),
+      );
 
       const rewardByOrderProduct = new Map<string, number>();
       const rewardByOrder = new Map<string, number>();
+      const redeemedByOrder = new Map<string, { points: number; discount: number }>();
+      const productById = new Map<string, any>();
 
       const { data: rewards, error: rewardError } = await supabase
         .from("customer_rewards")
@@ -1406,10 +1504,30 @@ app.get("/api/orders", requireAuth, async (req: AuthedRequest, res, next) => {
         rewardByOrder.set(reward.order_id, (rewardByOrder.get(reward.order_id) || 0) + points);
       }
 
+      const { data: redemptions, error: redemptionsError } = await supabase
+        .from("customer_reward_redemptions")
+        .select("order_id, points, discount_amount")
+        .in("order_id", orderIds);
+      if (redemptionsError && redemptionsError.code !== "42P01") throw redemptionsError;
+      for (const redemption of redemptions || []) {
+        redeemedByOrder.set(redemption.order_id, {
+          points: Number(redemption.points || 0),
+          discount: money(redemption.discount_amount),
+        });
+      }
+
+      if (productIds.length > 0) {
+        const { data: productRows, error: productRowsError } = await supabase
+          .from("products")
+          .select("*, product_images(*)")
+          .in("id", productIds);
+        if (productRowsError) throw productRowsError;
+        for (const product of productRows || []) {
+          productById.set(product.id, mapProduct(product));
+        }
+      }
+
       if (!rewards || rewards.length === 0) {
-        const productIds = Array.from(
-          new Set(rows.flatMap((order: any) => (order.order_items || []).map((item: any) => item.product_id))),
-        );
         if (productIds.length > 0) {
           const { data: receivedStages, error: receivedError } = await supabase
             .from("traceability_stages")
@@ -1430,9 +1548,12 @@ app.get("/api/orders", requireAuth, async (req: AuthedRequest, res, next) => {
       return rows.map((order: any) => ({
         ...order,
         reward_points: rewardByOrder.get(order.id) || 0,
+        reward_points_redeemed: redeemedByOrder.get(order.id)?.points || 0,
+        reward_discount: redeemedByOrder.get(order.id)?.discount || 0,
         order_items: (order.order_items || []).map((item: any) => ({
           ...item,
           rewardPoints: rewardByOrderProduct.get(`${order.id}:${item.product_id}`) || 0,
+          product: productById.get(item.product_id) || null,
         })),
       }));
     }
@@ -1442,7 +1563,10 @@ app.get("/api/orders", requireAuth, async (req: AuthedRequest, res, next) => {
     }
 
     if (scope === "sales" || scope === "operations") {
-      const paidOrders = orders.filter((order: any) => ["paid", "shipped", "delivered"].includes(order.status));
+      const paidOrders = orders.filter((order: any) =>
+        ["paid", "shipped", "delivered"].includes(order.status) ||
+        ["preparing", "shipped", "delivered"].includes(order.fulfillment_status),
+      );
       const productIds = Array.from(
         new Set(paidOrders.flatMap((order: any) => (order.order_items || []).map((item: any) => item.product_id))),
       );
@@ -1502,6 +1626,7 @@ app.get("/api/orders", requireAuth, async (req: AuthedRequest, res, next) => {
     }
 
     const purchaseRows = orders.filter((order: any) => {
+        if (order.status === "cancelled" || order.fulfillment_status === "cancelled") return false;
         return order.customer_id === req.user!.id || order.customer_email === req.profile!.email;
       });
     res.json(await attachRewards(purchaseRows));
@@ -1515,9 +1640,13 @@ app.post("/api/orders/:id/fulfillment", requireAuth, requireRoles(["cooperative"
     const status = ["preparing", "shipped", "delivered", "cancelled"].includes(req.body.status)
       ? req.body.status
       : "preparing";
+    const orderStatus =
+      status === "delivered" || status === "shipped" || status === "cancelled"
+        ? status
+        : "paid";
     const { data, error } = await supabase
       .from("orders")
-      .update({ fulfillment_status: status })
+      .update({ fulfillment_status: status, status: orderStatus })
       .eq("id", req.params.id)
       .select("*, order_items(*)")
       .single();

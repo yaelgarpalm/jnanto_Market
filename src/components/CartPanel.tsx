@@ -10,6 +10,10 @@ interface CartPanelProps {
   setShippingForm: React.Dispatch<React.SetStateAction<any>>;
   saveDeliveryInfo: boolean;
   setSaveDeliveryInfo: React.Dispatch<React.SetStateAction<boolean>>;
+  rewardBalance: number;
+  rewardDiscount: number;
+  useRewardPoints: boolean;
+  setUseRewardPoints: React.Dispatch<React.SetStateAction<boolean>>;
   onCheckout: () => void;
 }
 
@@ -21,9 +25,14 @@ export default function CartPanel({
   setShippingForm,
   saveDeliveryInfo,
   setSaveDeliveryInfo,
+  rewardBalance,
+  rewardDiscount,
+  useRewardPoints,
+  setUseRewardPoints,
   onCheckout,
 }: CartPanelProps) {
   const hasShipping = shippingForm.name && shippingForm.phone && shippingForm.address && shippingForm.city && shippingForm.state && shippingForm.postalCode;
+  const payableTotal = Math.max(total - rewardDiscount, 0);
 
   return (
     <div className="rounded-2xl border border-[#E6E2DA] bg-white p-4 shadow-xs space-y-4">
@@ -123,10 +132,33 @@ export default function CartPanel({
       </div>
 
       <div className="mt-3 border-t border-[#E6E2DA] pt-3">
+        <div className="mb-3 rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3 text-xs">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-bold text-[#2D2D2A]">Puntos Jnatjo</p>
+              <p className="mt-0.5 text-[10px] text-[#6B665F]">
+                Disponibles: {rewardBalance} puntos. Usa hasta 20% de descuento.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={useRewardPoints}
+              disabled={rewardBalance <= 0 || total <= 0}
+              onChange={(e) => setUseRewardPoints(e.target.checked)}
+              className="h-4 w-4 accent-[#5A6A42] disabled:opacity-40"
+              aria-label="Usar puntos como descuento"
+            />
+          </div>
+          {rewardDiscount > 0 && (
+            <p className="mt-2 font-bold text-[#5A6A42]">
+              Descuento aplicado: -${rewardDiscount.toLocaleString("es-MX")} MXN
+            </p>
+          )}
+        </div>
         <div className="flex justify-between text-xs font-serif font-bold text-[#2D2D2A]">
           <span>Total de Venta</span>
           <span className="text-sm font-sans font-extrabold text-[#5A6A42]">
-            ${total.toLocaleString("es-MX")} MXN
+            ${payableTotal.toLocaleString("es-MX")} MXN
           </span>
         </div>
         <button
