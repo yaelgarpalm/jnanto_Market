@@ -7,6 +7,7 @@ import { createClient, SupabaseClient, User } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import QRCode from "qrcode";
 import { jsPDF } from "jspdf";
+import WebSocket from "ws";
 import { createWalletClient, http } from "viem";
 import { polygonAmoy } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
@@ -24,6 +25,7 @@ const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL;
 const BLOCKCHAIN_PRIVATE_KEY = process.env.BLOCKCHAIN_PRIVATE_KEY;
 const AMOY_CHAIN_ID = 80002;
+const websocketTransport = WebSocket as unknown as typeof globalThis.WebSocket;
 
 if (!PROJECT_URL || !SERVICE_KEY) {
   throw new Error("Missing VITE_SUPABASE_URL or SUPABASE_SECRET_KEY. Copy .env.example to .env.local and configure Supabase.");
@@ -33,6 +35,9 @@ const supabase = createClient(PROJECT_URL, SERVICE_KEY, {
   auth: {
     autoRefreshToken: false,
     persistSession: false,
+  },
+  realtime: {
+    transport: websocketTransport,
   },
 });
 
