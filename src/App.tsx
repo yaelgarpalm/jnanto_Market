@@ -269,12 +269,12 @@ export default function App() {
         api<CommunityResource[]>("/api/resources"),
         api<{ balance: number; movements: CommunityFundMovement[] }>("/api/community-fund"),
       ]);
-      setProducts(productRows);
-      setCooperatives(coopRows);
-      setProducers(producerRows);
-      setResources(resourceRows);
-      setFundBalance(fund.balance);
-      setFundMovements(fund.movements);
+      setProducts(Array.isArray(productRows) ? productRows : []);
+      setCooperatives(Array.isArray(coopRows) ? coopRows : []);
+      setProducers(Array.isArray(producerRows) ? producerRows : []);
+      setResources(Array.isArray(resourceRows) ? resourceRows : []);
+      setFundBalance(fund?.balance ?? 0);
+      setFundMovements(Array.isArray(fund?.movements) ? fund.movements : []);
       if (!reservationForm.resourceId && resourceRows[0]) {
         setReservationForm((prev) => ({ ...prev, resourceId: resourceRows[0].id }));
       }
@@ -299,12 +299,12 @@ export default function App() {
         api<RewardBalance>("/api/rewards/balance"),
       ]);
       setProfile(profileRow);
-      setReservations(reservationRows);
-      setPurchaseOrders(purchaseRows);
-      setSalesOrders(salesRows);
-      setOrders(adminOrderRows);
-      setMovements(movementRows);
-      setRewardBalance(rewards);
+      setReservations(Array.isArray(reservationRows) ? reservationRows : []);
+      setPurchaseOrders(Array.isArray(purchaseRows) ? purchaseRows : []);
+      setSalesOrders(Array.isArray(salesRows) ? salesRows : []);
+      setOrders(Array.isArray(adminOrderRows) ? adminOrderRows : []);
+      setMovements(Array.isArray(movementRows) ? movementRows : []);
+      setRewardBalance(rewards && typeof rewards === 'object' ? rewards : { earnedPoints: 0, redeemedPoints: 0, availablePoints: 0, mxnPerPoint: 1, maxCheckoutPercent: 20 });
       if (profileRow.role === "admin") {
         const adminProfileRows = await api<Profile[]>("/api/admin/profiles");
         setAdminProfiles(adminProfileRows);
@@ -542,7 +542,8 @@ export default function App() {
     const minProducerShare =
       marketplaceFilters.minProducerShare === "all" ? 0 : Number(marketplaceFilters.minProducerShare);
 
-    const rows = products.filter((product) => {
+    const safeProducts = Array.isArray(products) ? products : [];
+    const rows = safeProducts.filter((product) => {
       if (product.status !== "verified") return false;
       const producerShare = product.breakdown.materialsCost + product.breakdown.laborCost;
       const producerPercent = product.price > 0 ? Math.round((producerShare / product.price) * 100) : 0;
@@ -585,9 +586,10 @@ export default function App() {
   const notificationItems = useMemo<AppNotification[]>(() => {
     if (!profile) return [];
     const items: AppNotification[] = [];
+    const safeProds = Array.isArray(products) ? products : [];
     const ownProducts = profile.role === "producer"
-      ? products.filter((product) => product.producerId === profile.id || product.producerName === profile.full_name)
-      : products;
+      ? safeProds.filter((product) => product.producerId === profile.id || product.producerName === profile.full_name)
+      : safeProds;
 
     if (["producer", "cooperative", "inventory_manager", "admin"].includes(profile.role)) {
       ownProducts
@@ -604,7 +606,7 @@ export default function App() {
     }
 
     if (["cooperative", "inventory_manager", "admin"].includes(profile.role)) {
-      fundMovements
+      (Array.isArray(fundMovements) ? fundMovements : [])
         .filter((movement) => movement.type === "expense" && movement.approval_status !== "confirmed")
         .slice(0, 4)
         .forEach((movement) => items.push({
@@ -615,7 +617,7 @@ export default function App() {
           action: "openFund",
         }));
 
-      resources
+      (Array.isArray(resources) ? resources : [])
         .filter((resource) => Number(resource.quantity || 0) <= Number(resource.low_stock_threshold || 0))
         .slice(0, 4)
         .forEach((resource) => items.push({
@@ -626,7 +628,7 @@ export default function App() {
           action: "openInventory",
         }));
 
-      reservations
+      (Array.isArray(reservations) ? reservations : [])
         .filter((reservation) => reservation.status === "pending")
         .slice(0, 4)
         .forEach((reservation) => items.push({
@@ -639,7 +641,7 @@ export default function App() {
     }
 
     if (profile.role === "customer") {
-      reservations
+      (Array.isArray(reservations) ? reservations : [])
         .filter((reservation) => reservation.status !== "pending")
         .slice(0, 4)
         .forEach((reservation) => items.push({
@@ -652,7 +654,7 @@ export default function App() {
     }
 
     if (profile.role === "producer") {
-      salesOrders
+      (Array.isArray(salesOrders) ? salesOrders : [])
         .flatMap((order) =>
           (order.order_items || []).map((item) => ({
             order,
@@ -660,7 +662,7 @@ export default function App() {
           })),
         )
         .filter(({ order, item }) => {
-          const product = products.find((candidate) => candidate.id === item.product_id);
+          const product = safeProds.find((candidate) => candidate.id === item.product_id);
           const isOwnProduct =
             product?.producerId === profile.id ||
             normalizeText(product?.producerName) === normalizeText(profile.full_name);
@@ -680,7 +682,7 @@ export default function App() {
     }
 
     if (["cooperative", "verifier", "admin"].includes(profile.role)) {
-      products
+      safeProds
         .filter((product) => product.status === "pending")
         .slice(0, 4)
         .forEach((product) => items.push({
@@ -694,7 +696,7 @@ export default function App() {
     }
 
     if (profile.role === "customer") {
-      purchaseOrders.slice(0, 5).forEach((order) => {
+      (Array.isArray(purchaseOrders) ? purchaseOrders : []).slice(0, 5).forEach((order) => {
         const count = order.order_items?.length || 0;
         const fulfillment = order.fulfillment_status || "pending";
         if (order.status === "pending") {
