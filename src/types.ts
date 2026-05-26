@@ -71,6 +71,8 @@ export interface Product {
   traceCode: string;
   breakdown: PriceBreakdown;
   fairTradeBadges: string[];
+  rating?: number;
+  reviewCount?: number;
   qrPayload?: string;
   nfcPayload?: string;
   associatedResources?: string[];

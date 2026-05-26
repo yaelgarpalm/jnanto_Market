@@ -16,6 +16,9 @@ export default function ProductCard({ product, onSelect, onAddToCart, featured =
   const [liked, setLiked] = useState(false);
   const producerShare = product.breakdown.materialsCost + product.breakdown.laborCost;
   const producerPercent = Math.round((producerShare / product.price) * 100);
+  const rating = Number(product.rating || 0);
+  const reviewCount = Number(product.reviewCount || 0);
+  const roundedRating = Math.round(rating);
 
   return (
     <article
@@ -80,11 +83,13 @@ export default function ProductCard({ product, onSelect, onAddToCart, featured =
         </div>
 
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1 text-[#11a652]" aria-label="Calificacion 5 estrellas">
+          <div className="flex items-center gap-1 text-[#11a652]" aria-label={reviewCount > 0 ? `Calificacion ${rating} estrellas` : "Sin reseñas"}>
             {Array.from({ length: 5 }).map((_, index) => (
-              <Star key={index} className="h-3.5 w-3.5 fill-current" />
+              <Star key={index} className={`h-3.5 w-3.5 ${index < roundedRating ? "fill-current" : "text-[#c8cec9]"}`} />
             ))}
-            <span className="ml-1 text-[11px] font-semibold text-[#5e6963]">(121)</span>
+            <span className="ml-1 text-[11px] font-semibold text-[#5e6963]">
+              {reviewCount > 0 ? `${rating.toFixed(1)} (${reviewCount})` : "Sin reseñas"}
+            </span>
           </div>
           <span className="rounded-full bg-[#f4f5f3] px-2 py-1 text-[10px] font-bold text-[#5e6963]">
             {product.category}

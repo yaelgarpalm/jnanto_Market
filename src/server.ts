@@ -418,9 +418,46 @@ function mapProduct(row: any) {
     traceCode: row.trace_code,
     breakdown: { ...breakdown, materialItems },
     fairTradeBadges: Array.isArray(row.fair_trade_badges) ? row.fair_trade_badges : [],
+    rating: typeof row.rating === "number" ? row.rating : undefined,
+    reviewCount: typeof row.review_count === "number" ? row.review_count : undefined,
     qrPayload: row.qr_payload,
     nfcPayload: row.nfc_payload,
   };
+}
+
+async function attachProductReviews<T extends any>(rows: T[]): Promise<T[]> {
+  const productIds = rows.map((row: any) => row.id).filter(Boolean);
+  if (productIds.length === 0) return rows;
+
+  const { data, error } = await supabase
+    .from("traceability_stages")
+    .select("product_id, payload")
+    .eq("stage_key", "received")
+    .in("product_id", productIds);
+  if (error) throw error;
+
+  const stats = new Map<string, { sum: number; count: number }>();
+  for (const stage of data || []) {
+    const producerRating = Number(stage.payload?.producerRating || 0);
+    const deliveryRating = Number(stage.payload?.deliveryRating || 0);
+    const values = [producerRating, deliveryRating].filter((value) => value > 0);
+    if (values.length === 0) continue;
+    const rating = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const current = stats.get(stage.product_id) || { sum: 0, count: 0 };
+    current.sum += rating;
+    current.count += 1;
+    stats.set(stage.product_id, current);
+  }
+
+  return rows.map((row: any) => {
+    const stat = stats.get(row.id);
+    if (!stat || stat.count === 0) return { ...row, rating: 0, review_count: 0 };
+    return {
+      ...row,
+      rating: Math.round((stat.sum / stat.count) * 10) / 10,
+      review_count: stat.count,
+    };
+  });
 }
 
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async (req, res, next) => {
@@ -657,7 +694,8 @@ app.get("/api/products", async (req, res, next) => {
     if (req.query.category && req.query.category !== "Todos") query = query.eq("category", String(req.query.category));
     const { data, error } = await query;
     if (error) throw error;
-    res.json((data || []).map(mapProduct));
+    const rows = await attachProductReviews(data || []);
+    res.json(rows.map(mapProduct));
   } catch (error) {
     next(error);
   }
@@ -668,7 +706,8 @@ app.get("/api/products/:id", async (req, res, next) => {
     const { data, error } = await supabase.from("products").select("*, product_images(*)").eq("id", req.params.id).maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: "Producto no encontrado." });
-    res.json(mapProduct(data));
+    const [row] = await attachProductReviews([data]);
+    res.json(mapProduct(row));
   } catch (error) {
     next(error);
   }

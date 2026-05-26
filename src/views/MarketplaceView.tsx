@@ -194,7 +194,7 @@ export default function MarketplaceView({
           >
             {categories.map((item) => (
               <option key={item} value={item}>
-                {item === "Todos" ? "Categoria" : item}
+                {item}
               </option>
             ))}
           </select>
@@ -204,7 +204,7 @@ export default function MarketplaceView({
             onChange={(event) => setFilters((prev) => ({ ...prev, maxPrice: event.target.value as typeof filters.maxPrice }))}
             className="h-10 rounded-full border border-transparent bg-[#eef0ed] px-4 text-xs font-black text-[#101815] outline-none transition focus:border-[#004d32] focus:bg-white"
           >
-            <option value="all">Precio</option>
+            <option value="all">Todos los precios</option>
             <option value="500">Hasta $500</option>
             <option value="1000">Hasta $1,000</option>
             <option value="1500">Hasta $1,500</option>
@@ -215,7 +215,7 @@ export default function MarketplaceView({
             onChange={(event) => setFilters((prev) => ({ ...prev, material: event.target.value }))}
             className="h-10 rounded-full border border-transparent bg-[#eef0ed] px-4 text-xs font-black text-[#101815] outline-none transition focus:border-[#004d32] focus:bg-white"
           >
-            <option value="all">Material</option>
+            <option value="all">Todos los materiales</option>
             {materialOptions.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -228,7 +228,7 @@ export default function MarketplaceView({
             onChange={(event) => setFilters((prev) => ({ ...prev, minProducerShare: event.target.value as typeof filters.minProducerShare }))}
             className="h-10 rounded-full border border-transparent bg-[#eef0ed] px-4 text-xs font-black text-[#101815] outline-none transition focus:border-[#004d32] focus:bg-white"
           >
-            <option value="all">Pago directo</option>
+            <option value="all">Todos los pagos</option>
             <option value="60">60% o más</option>
             <option value="70">70% o más</option>
           </select>
