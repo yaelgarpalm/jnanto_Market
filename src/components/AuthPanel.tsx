@@ -49,17 +49,13 @@ export default function AuthPanel({
   cooperatives,
 }: AuthPanelProps) {
   const [profileForm, setProfileForm] = useState({
-    role: "customer" as UserRole,
     community: "San Felipe del Progreso",
-    cooperativeId: "coop-1",
   });
 
   useEffect(() => {
     if (profile) {
       setProfileForm({
-        role: profile.role,
         community: profile.community || "San Felipe del Progreso",
-        cooperativeId: profile.cooperative_id || "coop-1",
       });
     }
   }, [profile]);
@@ -93,37 +89,15 @@ export default function AuthPanel({
         {profile.role !== "admin" && (
           <div className="border-t border-[#E6E2DA] pt-3 space-y-2">
             <p className="text-[10px] font-bold uppercase tracking-widest text-[#8A847C]">Perfil operativo</p>
-            <select
-              value={profileForm.role}
-              onChange={(e) => setProfileForm((p) => ({ ...p, role: e.target.value as UserRole }))}
-              className="w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
-            >
-              <option value="customer">Cliente</option>
-              <option value="producer">Productor / Artesano</option>
-              <option value="cooperative">Cooperativa</option>
-            </select>
             <input
               value={profileForm.community}
               onChange={(e) => setProfileForm((p) => ({ ...p, community: e.target.value }))}
               className="w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
               placeholder="Comunidad"
             />
-            {profileForm.role !== "customer" && (
-              <select
-                value={profileForm.cooperativeId}
-                onChange={(e) => setProfileForm((p) => ({ ...p, cooperativeId: e.target.value }))}
-                className="w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
-              >
-                {cooperatives.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            )}
             <button
               type="button"
-              onClick={() => onProfileUpdate(profileForm)}
+              onClick={() => onProfileUpdate({ role: profile.role, community: profileForm.community, cooperativeId: profile.cooperative_id || "" })}
               className="w-full rounded-xl bg-[#2D2D2A] hover:bg-[#5A6A42] py-2 text-xs font-bold text-white transition-all cursor-pointer"
             >
               Guardar asociación
@@ -209,34 +183,12 @@ export default function AuthPanel({
           </label>
           {authMode === "register" && (
             <>
-              <select
-                className="w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
-                value={authForm.role}
-                onChange={(e) => setAuthForm((p: any) => ({ ...p, role: e.target.value }))}
-              >
-                <option value="customer">Cliente</option>
-                <option value="producer">Productor / Artesano</option>
-                <option value="cooperative">Cooperativa / Verificador</option>
-              </select>
               <input
                 className="w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
                 placeholder="Comunidad de residencia"
                 value={authForm.community}
                 onChange={(e) => setAuthForm((p: any) => ({ ...p, community: e.target.value }))}
               />
-              {authForm.role !== "customer" && (
-                <select
-                  className="w-full rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] px-3 py-2 text-xs outline-none focus:border-[#C2845D]"
-                  value={authForm.cooperativeId}
-                  onChange={(e) => setAuthForm((p: any) => ({ ...p, cooperativeId: e.target.value }))}
-                >
-                  {cooperatives.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              )}
             </>
           )}
           <button className="w-full rounded-xl bg-[#2D2D2A] hover:bg-[#5A6A42] py-3 text-sm font-bold text-white transition-all cursor-pointer">
