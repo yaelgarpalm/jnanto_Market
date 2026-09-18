@@ -504,25 +504,53 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
           }, { onConflict: "provider_session_id" });
 
           for (const item of order.order_items || []) {
+            const { data: existingSale } = await supabase
+              .from("traceability_stages")
+              .select("id")
+              .eq("product_id", item.product_id)
+              .eq("stage_key", "sold")
+              .contains("payload", { orderId })
+              .maybeSingle();
+            if (existingSale) continue;
+
             const { data: product } = await supabase.from("products").select("*").eq("id", item.product_id).maybeSingle();
-            if (!product) continue;
-            await supabase
+            if (!product) throw new Error(`Producto no encontrado: ${item.product_id}`);
+            if (Number(product.stock || 0) < Number(item.quantity || 1)) {
+              throw new Error(`Stock insuficiente para ${item.product_name}.`);
+            }
+
+            const { error: stockError } = await supabase
               .from("products")
-              .update({ stock: Math.max(Number(product.stock || 0) - Number(item.quantity || 1), 0) })
-              .eq("id", item.product_id);
-            await supabase.from("community_fund_movements").insert({
-              type: "income",
-              amount: money(item.community_fund),
-              description: `Aportacion por venta de ${item.product_name}`,
-              responsible: "Stripe Checkout",
-              order_id: orderId,
-              cooperative_id: product.cooperative_id,
-            });
+              .update({ stock: Number(product.stock || 0) - Number(item.quantity || 1) })
+              .eq("id", item.product_id)
+              .eq("stock", Number(product.stock || 0));
+            if (stockError) throw stockError;
+
+            const description = `Aportacion por venta de ${item.product_name}`;
+            const { data: existingFund } = await supabase
+              .from("community_fund_movements")
+              .select("id")
+              .eq("order_id", orderId)
+              .eq("type", "income")
+              .eq("description", description)
+              .maybeSingle();
+            if (!existingFund) {
+              const { error: fundError } = await supabase.from("community_fund_movements").insert({
+                type: "income",
+                amount: money(item.community_fund),
+                description,
+                responsible: "Stripe Checkout",
+                order_id: orderId,
+                cooperative_id: product.cooperative_id,
+              });
+              if (fundError) throw fundError;
+            }
+
             await insertTraceabilityStage({
               productId: item.product_id,
               stageKey: "sold",
               stageLabel: "Vendido con pago confirmado",
-              description: `Stripe confirmo la compra. Productor: $${item.producer_pay} MXN; fondo comunitario: $${item.community_fund} MXN.`,
+              description: `Stripe confirmo la compra. Productor: ${item.producer_pay} MXN; fondo comunitario: ${item.community_fund} MXN.`,
               responsible: "Stripe Checkout",
               payload: { orderId, stripeSessionId: session.id },
             });
