@@ -169,6 +169,23 @@ function requireRoles(roles: ProfileRole[]) {
   };
 }
 
+function canAccessCooperative(req: AuthedRequest, cooperativeId: unknown): boolean {
+  const target = assertString(cooperativeId);
+  if (!target || !req.profile) return false;
+  if (req.profile.role === "admin") return true;
+  return ["cooperative", "inventory_manager", "logistics", "verifier"].includes(req.profile.role)
+    && req.profile.cooperative_id === target;
+}
+
+function canManageProduct(req: AuthedRequest, product: any): boolean {
+  if (!req.profile) return false;
+  if (req.profile.role === "admin") return true;
+  if (req.profile.role === "producer") {
+    return product.owner_id === req.user!.id || product.producer_id === req.user!.id;
+  }
+  return canAccessCooperative(req, product.cooperative_id);
+}
+
 function requestOrigin(req: Request): string | null {
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
   const protocol = forwardedProto || req.protocol || "http";
@@ -474,18 +491,9 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
       const orderId = session.metadata?.orderId;
       if (orderId) {
         const { data: order } = await supabase.from("orders").select("*, order_items(*)").eq("id", orderId).maybeSingle();
-        if (order && order.status !== "paid") {
-          await supabase
-            .from("orders")
-            .update({
-              status: "paid",
-              fulfillment_status: "preparing",
-              paid_at: new Date().toISOString(),
-              stripe_payment_intent_id: typeof session.payment_intent === "string" ? session.payment_intent : null,
-            })
-            .eq("id", orderId);
+        if (order && order.status !== "paid" && session.payment_status === "paid") {
+          await supabase.from("payments").upsert({
 
-          await supabase.from("payments").insert({
             order_id: orderId,
             provider_payment_id: typeof session.payment_intent === "string" ? session.payment_intent : null,
             provider_session_id: session.id,
@@ -493,32 +501,72 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
             currency: session.currency || "mxn",
             status: "paid",
             raw_event: event as unknown as Record<string, unknown>,
-          });
+          }, { onConflict: "provider_session_id" });
 
           for (const item of order.order_items || []) {
+            const { data: existingSale } = await supabase
+              .from("traceability_stages")
+              .select("id")
+              .eq("product_id", item.product_id)
+              .eq("stage_key", "sold")
+              .contains("payload", { orderId })
+              .maybeSingle();
+            if (existingSale) continue;
+
             const { data: product } = await supabase.from("products").select("*").eq("id", item.product_id).maybeSingle();
-            if (!product) continue;
-            await supabase
+            if (!product) throw new Error(`Producto no encontrado: ${item.product_id}`);
+            if (Number(product.stock || 0) < Number(item.quantity || 1)) {
+              throw new Error(`Stock insuficiente para ${item.product_name}.`);
+            }
+
+            const { error: stockError } = await supabase
               .from("products")
-              .update({ stock: Math.max(Number(product.stock || 0) - Number(item.quantity || 1), 0) })
-              .eq("id", item.product_id);
-            await supabase.from("community_fund_movements").insert({
-              type: "income",
-              amount: money(item.community_fund),
-              description: `Aportacion por venta de ${item.product_name}`,
-              responsible: "Stripe Checkout",
-              order_id: orderId,
-              cooperative_id: product.cooperative_id,
-            });
+              .update({ stock: Number(product.stock || 0) - Number(item.quantity || 1) })
+              .eq("id", item.product_id)
+              .eq("stock", Number(product.stock || 0));
+            if (stockError) throw stockError;
+
+            const description = `Aportacion por venta de ${item.product_name}`;
+            const { data: existingFund } = await supabase
+              .from("community_fund_movements")
+              .select("id")
+              .eq("order_id", orderId)
+              .eq("type", "income")
+              .eq("description", description)
+              .maybeSingle();
+            if (!existingFund) {
+              const { error: fundError } = await supabase.from("community_fund_movements").insert({
+                type: "income",
+                amount: money(item.community_fund),
+                description,
+                responsible: "Stripe Checkout",
+                order_id: orderId,
+                cooperative_id: product.cooperative_id,
+              });
+              if (fundError) throw fundError;
+            }
+
             await insertTraceabilityStage({
               productId: item.product_id,
               stageKey: "sold",
               stageLabel: "Vendido con pago confirmado",
-              description: `Stripe confirmo la compra. Productor: $${item.producer_pay} MXN; fondo comunitario: $${item.community_fund} MXN.`,
+              description: `Stripe confirmo la compra. Productor: ${item.producer_pay} MXN; fondo comunitario: ${item.community_fund} MXN.`,
               responsible: "Stripe Checkout",
               payload: { orderId, stripeSessionId: session.id },
             });
           }
+
+          const { error: paidUpdateError } = await supabase
+            .from("orders")
+            .update({
+              status: "paid",
+              fulfillment_status: "preparing",
+              paid_at: new Date().toISOString(),
+              stripe_payment_intent_id: typeof session.payment_intent === "string" ? session.payment_intent : null,
+            })
+            .eq("id", orderId)
+            .eq("status", "pending");
+          if (paidUpdateError) throw paidUpdateError;
         }
       }
     }
@@ -549,10 +597,9 @@ app.post("/api/auth/register", async (req, res, next) => {
     const email = assertString(req.body.email).toLowerCase();
     const password = assertString(req.body.password);
     const fullName = assertString(req.body.fullName, email.split("@")[0] || "Usuario Jnatjo");
-    const allowedRoles: ProfileRole[] = ["customer", "producer", "cooperative"];
-    const role = allowedRoles.includes(req.body.role) ? req.body.role : "customer";
+    const role: ProfileRole = "customer";
     const community = assertString(req.body.community, "San Felipe del Progreso");
-    const cooperativeId = role === "customer" ? null : assertString(req.body.cooperativeId, "coop-1");
+    const cooperativeId = null;
 
     if (!email || !email.includes("@")) {
       return res.status(400).json({ error: "Ingresa un correo electrónico válido." });
@@ -594,28 +641,6 @@ app.post("/api/auth/register", async (req, res, next) => {
     const { data, error } = await supabase.from("profiles").upsert(profile).select("*").single();
     if (error) throw error;
 
-    if (role === "producer") {
-      await supabase.from("producers").upsert({
-        id: created.user.id,
-        user_id: created.user.id,
-        name: fullName,
-        community,
-        cooperative_id: cooperativeId || "coop-1",
-        verified: true,
-      });
-    } else if (role === "cooperative") {
-      const { data: cooperative } = await supabase.from("cooperatives").select("id").eq("id", cooperativeId || "coop-1").maybeSingle();
-      if (!cooperative) {
-        await supabase.from("cooperatives").insert({
-          id: cooperativeId || "coop-1",
-          name: fullName,
-          municipality: "San Felipe del Progreso",
-          community,
-          representative: fullName,
-        });
-      }
-    }
-
     res.status(201).json(data);
   } catch (error) {
     next(error);
@@ -625,15 +650,14 @@ app.post("/api/auth/register", async (req, res, next) => {
 app.post("/api/auth/profile", requireUser, async (req: AuthedRequest, res, next) => {
   try {
     const existingProfile = await getProfile(req.user!.id);
-    const allowedRoles: ProfileRole[] = ["customer", "producer", "cooperative"];
-    const requestedRole = allowedRoles.includes(req.body.role) ? req.body.role : existingProfile?.role || "customer";
+    if (!existingProfile) return res.status(404).json({ error: "Perfil no encontrado." });
     const profile = {
       id: req.user!.id,
-      email: req.user!.email || existingProfile?.email || "",
-      full_name: assertString(req.body.fullName, existingProfile?.full_name || assertString(req.user!.email?.split("@")[0], "Cliente Jnatjo")),
-      role: existingProfile?.role === "admin" ? existingProfile.role : requestedRole,
-      community: assertString(req.body.community, existingProfile?.community || "San Felipe del Progreso"),
-      cooperative_id: requestedRole === "customer" ? null : assertString(req.body.cooperativeId, existingProfile?.cooperative_id || "coop-1"),
+      email: req.user!.email || existingProfile.email,
+      full_name: assertString(req.body.fullName, existingProfile.full_name || assertString(req.user!.email?.split("@")[0], "Cliente Jnatjo")),
+      role: existingProfile.role,
+      community: assertString(req.body.community, existingProfile.community || "San Felipe del Progreso"),
+      cooperative_id: existingProfile.cooperative_id,
     };
     const { data, error } = await supabase.from("profiles").upsert(profile).select("*").single();
     if (error) throw error;
@@ -718,8 +742,21 @@ app.post("/api/products", requireAuth, requireRoles(["producer", "cooperative", 
   try {
     const producerId = req.profile!.role === "producer" ? req.user!.id : assertString(req.body.producerId);
     const { data: producer } = await supabase.from("producers").select("*").eq("id", producerId).maybeSingle();
-    const cooperativeId = assertString(req.body.cooperativeId, producer?.cooperative_id || req.profile!.cooperative_id || "coop-1");
+    if (!producer) return res.status(404).json({ error: "Productor no encontrado." });
+
+    const requestedCooperativeId = assertString(req.body.cooperativeId);
+    const cooperativeId = req.profile!.role === "admin"
+      ? requestedCooperativeId || producer.cooperative_id
+      : req.profile!.cooperative_id || producer.cooperative_id;
+    if (!cooperativeId) return res.status(400).json({ error: "El producto debe quedar asociado a una cooperativa." });
+    if (producer.cooperative_id && producer.cooperative_id !== cooperativeId) {
+      return res.status(403).json({ error: "El productor no pertenece a la cooperativa indicada." });
+    }
+    if (req.profile!.role !== "admin" && !canAccessCooperative(req, cooperativeId)) {
+      return res.status(403).json({ error: "No puedes registrar productos fuera de tu cooperativa." });
+    }
     const { data: cooperative } = await supabase.from("cooperatives").select("*").eq("id", cooperativeId).maybeSingle();
+    if (!cooperative) return res.status(404).json({ error: "Cooperativa no encontrada." });
 
     const price = money(req.body.price);
     const materialItems = (Array.isArray(req.body.materialItems) ? req.body.materialItems : [])
@@ -984,6 +1021,17 @@ app.post("/api/products/:id/validate", requireAuth, requireRoles(["cooperative",
 
 app.post("/api/products/:id/ship", requireAuth, requireRoles(["producer", "cooperative", "logistics", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
+    const { data: product, error: productError } = await supabase
+      .from("products")
+      .select("id, owner_id, producer_id, cooperative_id")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (productError) throw productError;
+    if (!product) return res.status(404).json({ error: "Producto no encontrado." });
+    if (!canManageProduct(req, product)) {
+      return res.status(403).json({ error: "No puedes registrar el despacho de este producto." });
+    }
+
     const stage = await insertTraceabilityStage({
       productId: req.params.id,
       stageKey: "delivered",
@@ -1276,7 +1324,10 @@ app.post("/api/resources", requireAuth, requireRoles(["producer", "cooperative",
       description: assertString(req.body.description),
       quantity,
       unit: assertString(req.body.unit, "unidades"),
-      cooperative_id: assertString(req.body.cooperativeId, req.profile!.cooperative_id || "coop-1"),
+      cooperative_id: req.profile!.role === "admin"
+        ? assertString(req.body.cooperativeId, req.profile!.cooperative_id || "coop-1")
+        : req.profile!.cooperative_id || "",
+
       rental_cost: money(req.body.rentalCost),
       status: "available",
       available_shared: Boolean(req.body.availableShared ?? true),
@@ -1331,7 +1382,22 @@ app.post("/api/resources/:id/movement", requireAuth, requireRoles(["cooperative"
 
 app.get("/api/resources/reservations", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
-    const { data, error } = await supabase.from("resource_reservations").select("*").order("created_at", { ascending: false });
+    let query = supabase.from("resource_reservations").select("*").order("created_at", { ascending: false });
+    if (req.profile!.role === "admin") {
+      // unrestricted for administrators
+    } else if (["cooperative", "inventory_manager", "logistics", "verifier"].includes(req.profile!.role)) {
+      const { data: resources, error: resourceError } = await supabase
+        .from("shared_resources")
+        .select("id")
+        .eq("cooperative_id", req.profile!.cooperative_id);
+      if (resourceError) throw resourceError;
+      const ids = (resources || []).map((row: any) => row.id);
+      if (ids.length === 0) return res.json([]);
+      query = query.in("resource_id", ids);
+    } else {
+      query = query.eq("user_id", req.user!.id);
+    }
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -1339,9 +1405,21 @@ app.get("/api/resources/reservations", requireAuth, async (req: AuthedRequest, r
   }
 });
 
-app.get("/api/resources/movements", requireAuth, async (_req, res, next) => {
+app.get("/api/resources/movements", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
-    const { data, error } = await supabase.from("inventory_movements").select("*").order("created_at", { ascending: false });
+    if (req.profile!.role === "customer") return res.json([]);
+    let query = supabase.from("inventory_movements").select("*").order("created_at", { ascending: false });
+    if (req.profile!.role !== "admin") {
+      const { data: resources, error: resourceError } = await supabase
+        .from("shared_resources")
+        .select("id")
+        .eq("cooperative_id", req.profile!.cooperative_id);
+      if (resourceError) throw resourceError;
+      const ids = (resources || []).map((row: any) => row.id);
+      if (ids.length === 0) return res.json([]);
+      query = query.in("resource_id", ids);
+    }
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -1383,6 +1461,17 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
       .select("id, status, resource_id, quantity")
       .eq("id", req.params.id)
       .maybeSingle();
+    if (!existing) return res.status(404).json({ error: "Reservación no encontrada." });
+
+    const { data: existingResource } = await supabase
+      .from("shared_resources")
+      .select("cooperative_id")
+      .eq("id", existing.resource_id)
+      .maybeSingle();
+    if (!existingResource) return res.status(404).json({ error: "Recurso no encontrado." });
+    if (!canAccessCooperative(req, existingResource.cooperative_id)) {
+      return res.status(403).json({ error: "No puedes gestionar reservas de otra cooperativa." });
+    }
 
     const { data, error } = await supabase
       .from("resource_reservations")
@@ -1500,6 +1589,9 @@ app.post("/api/community-fund/movements/:id/confirm", requireAuth, requireRoles(
     if (movementError) throw movementError;
     if (!movement) return res.status(404).json({ error: "Movimiento del fondo no encontrado." });
     if (movement.type !== "expense") return res.status(400).json({ error: "Solo los gastos requieren confirmacion." });
+    if (!canAccessCooperative(req, movement.cooperative_id)) {
+      return res.status(403).json({ error: "No puedes confirmar gastos de otra cooperativa." });
+    }
 
     const { data, error } = await supabase
       .from("community_fund_movements")
@@ -1659,10 +1751,11 @@ app.post("/api/checkout/confirm", requireAuth, async (req: AuthedRequest, res, n
       .from("orders")
       .select("*, order_items(*)")
       .eq("id", orderId)
+      .eq("customer_id", req.user!.id)
       .maybeSingle();
 
     if (error) throw error;
-    if (!order) return res.status(404).json({ error: "Orden no encontrada." });
+    if (!order) return res.status(404).json({ error: "Orden no encontrada o no pertenece al usuario." });
 
     if (order.status === "paid") {
       return res.json({ success: true, alreadyPaid: true });
@@ -1672,15 +1765,17 @@ app.post("/api/checkout/confirm", requireAuth, async (req: AuthedRequest, res, n
     let paymentIntentId: string | null = null;
     const sessionId = order.stripe_checkout_session_id;
 
-    if (stripe && sessionId) {
-      const session = await stripe.checkout.sessions.retrieve(sessionId);
-      if (session.payment_status === "paid" || session.status === "complete") {
-        isPaid = true;
-        paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : null;
-      }
-    } else {
-      // Fallback para pruebas simuladas si no hay Stripe configurado o no hay sesión
+    if (!stripe || !sessionId) {
+      return res.status(503).json({ error: "No es posible confirmar el pedido sin una sesión de Stripe válida." });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    if (session.metadata?.orderId !== orderId) {
+      return res.status(409).json({ error: "La sesión de Stripe no corresponde a esta orden." });
+    }
+    if (session.payment_status === "paid") {
       isPaid = true;
+      paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : null;
     }
 
     if (isPaid) {
@@ -1712,28 +1807,56 @@ app.post("/api/checkout/confirm", requireAuth, async (req: AuthedRequest, res, n
       });
 
       for (const item of order.order_items || []) {
+        const { data: existingSale } = await supabase
+          .from("traceability_stages")
+          .select("id")
+          .eq("product_id", item.product_id)
+          .eq("stage_key", "sold")
+          .contains("payload", { orderId })
+          .maybeSingle();
+        if (existingSale) continue;
+
         const { data: product } = await supabase.from("products").select("*").eq("id", item.product_id).maybeSingle();
-        if (!product) continue;
+        if (!product) throw new Error(`Producto no encontrado: ${item.product_id}`);
+        if (Number(product.stock || 0) < Number(item.quantity || 1)) {
+          return res.status(409).json({ error: `No hay existencias suficientes para ${item.product_name}.` });
+        }
 
-        await supabase
+        const { data: stockUpdate, error: stockError } = await supabase
           .from("products")
-          .update({ stock: Math.max(Number(product.stock || 0) - Number(item.quantity || 1), 0) })
-          .eq("id", item.product_id);
+          .update({ stock: Number(product.stock || 0) - Number(item.quantity || 1) })
+          .eq("id", item.product_id)
+          .eq("stock", Number(product.stock || 0))
+          .select("id")
+          .maybeSingle();
+        if (stockError) throw stockError;
+        if (!stockUpdate) return res.status(409).json({ error: `El inventario cambió mientras se confirmaba la orden de ${item.product_name}.` });
 
-        await supabase.from("community_fund_movements").insert({
-          type: "income",
-          amount: money(item.community_fund),
-          description: `Aportacion por venta de ${item.product_name}`,
-          responsible: "Stripe Checkout",
-          order_id: orderId,
-          cooperative_id: product.cooperative_id,
-        });
+        const description = `Aportacion por venta de ${item.product_name}`;
+        const { data: existingFund } = await supabase
+          .from("community_fund_movements")
+          .select("id")
+          .eq("order_id", orderId)
+          .eq("type", "income")
+          .eq("description", description)
+          .maybeSingle();
+        if (!existingFund) {
+          const { error: fundError } = await supabase.from("community_fund_movements").insert({
+            type: "income",
+            amount: money(item.community_fund),
+            description,
+            responsible: "Stripe Checkout",
+            order_id: orderId,
+            cooperative_id: product.cooperative_id,
+          });
+          if (fundError) throw fundError;
+        }
 
         await insertTraceabilityStage({
           productId: item.product_id,
           stageKey: "sold",
           stageLabel: "Vendido con pago confirmado",
-          description: `Compra confirmada por Stripe. Productor: $${item.producer_pay} MXN; Fondo comunitario: $${item.community_fund} MXN.`,
+          description: `Compra confirmada por Stripe. Productor: ${item.producer_pay} MXN; Fondo comunitario: ${item.community_fund} MXN.`,
           responsible: "Stripe Checkout",
           payload: { orderId, stripeSessionId: sessionId },
         });
@@ -1919,13 +2042,68 @@ app.post("/api/orders/:id/fulfillment", requireAuth, requireRoles(["cooperative"
     const status = ["preparing", "shipped", "delivered", "cancelled"].includes(req.body.status)
       ? req.body.status
       : "preparing";
-    const orderStatus =
-      status === "delivered" || status === "shipped" || status === "cancelled"
-        ? status
-        : "paid";
+
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (orderError) throw orderError;
+    if (!order) return res.status(404).json({ error: "Orden no encontrada." });
+
+    const productIds = (order.order_items || []).map((item: any) => item.product_id);
+    if (req.profile!.role !== "admin" && productIds.length > 0) {
+      const { data: products, error: productError } = await supabase
+        .from("products")
+        .select("id, cooperative_id")
+        .in("id", productIds);
+      if (productError) throw productError;
+      if (!(products || []).every((product: any) => canAccessCooperative(req, product.cooperative_id))) {
+        return res.status(403).json({ error: "No puedes gestionar una orden fuera de tu cooperativa." });
+      }
+    }
+
+    if (status !== "cancelled" && order.status !== "paid" && !["shipped", "delivered"].includes(order.status)) {
+      return res.status(409).json({ error: "La orden no puede avanzar a logística hasta que el pago esté confirmado." });
+    }
+
+    if (status === "cancelled" && order.status === "paid") {
+      if (!stripe || !order.stripe_payment_intent_id) {
+        return res.status(409).json({ error: "La orden pagada requiere un PaymentIntent de Stripe para procesar el reembolso." });
+      }
+      await stripe.refunds.create({
+        payment_intent: order.stripe_payment_intent_id,
+        reason: "requested_by_customer",
+      });
+
+      for (const item of order.order_items || []) {
+        const { data: product } = await supabase.from("products").select("stock, cooperative_id").eq("id", item.product_id).maybeSingle();
+        if (!product) continue;
+        await supabase
+          .from("products")
+          .update({ stock: Number(product.stock || 0) + Number(item.quantity || 0) })
+          .eq("id", item.product_id);
+        const fundAmount = money(item.community_fund);
+        if (fundAmount > 0) {
+          await supabase.from("community_fund_movements").insert({
+            type: "expense",
+            amount: fundAmount,
+            description: `Reversion de fondo por cancelacion de la orden ${req.params.id.slice(0, 8)}`,
+            responsible: req.profile!.full_name,
+            order_id: req.params.id,
+            cooperative_id: product.cooperative_id,
+            approval_status: "confirmed",
+            approved_by: req.user!.id,
+            approved_at: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    const nextOrderStatus = status === "cancelled" ? "cancelled" : order.status;
     const { data, error } = await supabase
       .from("orders")
-      .update({ fulfillment_status: status, status: orderStatus })
+      .update({ fulfillment_status: status, status: nextOrderStatus })
       .eq("id", req.params.id)
       .select("*, order_items(*)")
       .single();
@@ -1938,11 +2116,50 @@ app.post("/api/orders/:id/fulfillment", requireAuth, requireRoles(["cooperative"
 
 app.post("/api/sensors", requireAuth, requireRoles(["logistics", "cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
+    const productId = assertString(req.body.productId) || null;
+    const orderId = assertString(req.body.orderId) || null;
+    if (!productId && !orderId) {
+      return res.status(400).json({ error: "Debes indicar un producto o una orden para la lectura." });
+    }
+
+    if (productId) {
+      const { data: product, error: productError } = await supabase
+        .from("products")
+        .select("id, owner_id, producer_id, cooperative_id")
+        .eq("id", productId)
+        .maybeSingle();
+      if (productError) throw productError;
+      if (!product || !canManageProduct(req, product)) {
+        return res.status(403).json({ error: "No puedes registrar sensores para este producto." });
+      }
+    }
+
+    if (orderId) {
+      const { data: order, error: orderError } = await supabase
+        .from("orders")
+        .select("id, customer_id, order_items(product_id)")
+        .eq("id", orderId)
+        .maybeSingle();
+      if (orderError) throw orderError;
+      if (!order) return res.status(404).json({ error: "Orden no encontrada." });
+      if (req.profile!.role !== "admin") {
+        const orderProductIds = (order.order_items || []).map((item: any) => item.product_id);
+        const { data: orderProducts, error: orderProductsError } = await supabase
+          .from("products")
+          .select("id, cooperative_id")
+          .in("id", orderProductIds);
+        if (orderProductsError) throw orderProductsError;
+        if (!(orderProducts || []).some((product: any) => canAccessCooperative(req, product.cooperative_id))) {
+          return res.status(403).json({ error: "No puedes registrar sensores para esta orden." });
+        }
+      }
+    }
+
     const { data, error } = await supabase
       .from("sensor_readings")
       .insert({
-        product_id: assertString(req.body.productId) || null,
-        order_id: assertString(req.body.orderId) || null,
+        product_id: productId,
+        order_id: orderId,
         sensor_type: assertString(req.body.sensorType, "temperature"),
         value: money(req.body.value),
         unit: assertString(req.body.unit),
@@ -1990,9 +2207,22 @@ app.get("/api/reports/community-fund.pdf", async (_req, res, next) => {
 app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const profile = req.profile!;
-    const producerId = profile.role === "producer"
-      ? req.user!.id
-      : String(req.query.producerId || req.user!.id);
+    let producerId: string;
+    if (profile.role === "producer") {
+      producerId = req.user!.id;
+    } else if (profile.role === "admin") {
+      producerId = assertString(req.query.producerId);
+      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
+    } else if (["cooperative", "inventory_manager", "logistics", "verifier"].includes(profile.role)) {
+      producerId = assertString(req.query.producerId);
+      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
+      const { data: scopedProducer } = await supabase.from("producers").select("cooperative_id").eq("id", producerId).maybeSingle();
+      if (!scopedProducer || !canAccessCooperative(req, scopedProducer.cooperative_id)) {
+        return res.status(403).json({ error: "No puedes consultar el reporte de otro ámbito operativo." });
+      }
+    } else {
+      return res.status(403).json({ error: "No tienes permiso para consultar reportes de productores." });
+    }
 
     const { data: producer } = await supabase
       .from("producers")
@@ -2149,9 +2379,16 @@ app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res
 app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const profile = req.profile!;
-    const cooperativeId = ["cooperative", "verifier", "inventory_manager", "logistics"].includes(profile.role)
-      ? profile.cooperative_id || String(req.query.cooperativeId || "coop-1")
-      : String(req.query.cooperativeId || "coop-1");
+    let cooperativeId: string;
+    if (profile.role === "admin") {
+      cooperativeId = assertString(req.query.cooperativeId);
+      if (!cooperativeId) return res.status(400).json({ error: "Indica la cooperativa para generar el reporte." });
+    } else if (["cooperative", "verifier", "inventory_manager", "logistics"].includes(profile.role)) {
+      cooperativeId = profile.cooperative_id || "";
+      if (!cooperativeId) return res.status(403).json({ error: "Tu cuenta no tiene una cooperativa asignada." });
+    } else {
+      return res.status(403).json({ error: "No tienes permiso para consultar reportes de cooperativas." });
+    }
 
     const { data: coop } = await supabase
       .from("cooperatives")
