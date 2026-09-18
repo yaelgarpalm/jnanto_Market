@@ -6,7 +6,7 @@ create unique index if not exists payments_provider_session_id_uidx
   where provider_session_id is not null;
 
 revoke execute on function public.register_route_device(text,text,text,text,uuid,text,numeric,numeric,numeric,jsonb)
-  from anon, authenticated;
+  from public, anon, authenticated;
 
 drop policy if exists route_sessions_authenticated_insert on public.route_sessions;
 drop policy if exists route_sessions_authenticated_select on public.route_sessions;
