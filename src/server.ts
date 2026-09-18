@@ -651,6 +651,15 @@ app.post("/api/auth/profile", requireUser, async (req: AuthedRequest, res, next)
   try {
     const existingProfile = await getProfile(req.user!.id);
     if (!existingProfile) return res.status(404).json({ error: "Perfil no encontrado." });
+    const requestedRole = assertString(req.body.role);
+    const requestedCooperativeId = assertString(req.body.cooperativeId);
+    if (requestedRole && requestedRole !== existingProfile.role) {
+      return res.status(403).json({ error: "El rol operativo solo puede ser asignado por un administrador." });
+    }
+    if (requestedCooperativeId && requestedCooperativeId !== (existingProfile.cooperative_id || "")) {
+      return res.status(403).json({ error: "La asociación a una cooperativa solo puede ser asignada por un administrador." });
+    }
+
     const profile = {
       id: req.user!.id,
       email: req.user!.email || existingProfile.email,
