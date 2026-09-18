@@ -102,9 +102,9 @@ async function getUserFromRequest(req: Request): Promise<User | null> {
 
 function profileFromUserMetadata(user: User): Profile {
   const metadata = user.user_metadata || {};
-  const allowedRoles: ProfileRole[] = ["customer", "producer", "cooperative"];
-  const metadataRole = typeof metadata.role === "string" ? metadata.role : "customer";
-  const role = allowedRoles.includes(metadataRole as ProfileRole) ? (metadataRole as ProfileRole) : "customer";
+  // Never trust auth user_metadata to assign an application role.
+  // Privileged roles must already exist in the profiles table and be provisioned by an administrator.
+  const role: ProfileRole = "customer";
   const fullName =
     assertString(metadata.full_name) ||
     assertString(metadata.fullName) ||
@@ -669,7 +669,6 @@ app.post("/api/auth/profile", requireUser, async (req: AuthedRequest, res, next)
         name: profile.full_name,
         community: profile.community,
         cooperative_id: profile.cooperative_id || "coop-1",
-        verified: true,
       });
     } else if (profile.role === "cooperative") {
       const cooperativeId = profile.cooperative_id || "coop-1";
