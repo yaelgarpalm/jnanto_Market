@@ -963,13 +963,13 @@ app.post("/api/products/:id/stock", requireAuth, requireRoles(["producer", "coop
     if (!product) return res.status(404).json({ error: "Producto no encontrado." });
 
     const profileName = normalizePersonName(req.profile!.full_name);
-    const isOperationsRole = ["admin", "cooperative", "inventory_manager"].includes(req.profile!.role);
     const canUpdate =
-      isOperationsRole ||
-      product.owner_id === req.user!.id ||
-      product.producer_id === req.user!.id ||
-      product.cooperative_id === req.profile!.cooperative_id ||
-      normalizePersonName(product.producer_name) === profileName;
+      req.profile!.role === "admin" ||
+      (["cooperative", "inventory_manager"].includes(req.profile!.role) && canAccessCooperative(req, product.cooperative_id)) ||
+      (req.profile!.role === "producer" &&
+        (product.owner_id === req.user!.id ||
+          product.producer_id === req.user!.id ||
+          normalizePersonName(product.producer_name) === profileName));
     if (!canUpdate) return res.status(403).json({ error: "No puedes abastecer este producto." });
 
     const nextStock = Number(product.stock || 0) + amount;
@@ -1002,6 +1002,9 @@ app.post("/api/products/:id/validate", requireAuth, requireRoles(["cooperative",
     const { data: product, error: productError } = await supabase.from("products").select("*").eq("id", req.params.id).maybeSingle();
     if (productError) throw productError;
     if (!product) return res.status(404).json({ error: "Producto no encontrado." });
+    if (!canAccessCooperative(req, product.cooperative_id)) {
+      return res.status(403).json({ error: "No puedes validar productos de otra cooperativa." });
+    }
     const { error } = await supabase.from("products").update({ status: "verified" }).eq("id", req.params.id);
     if (error) throw error;
     const stage = await insertTraceabilityStage({
@@ -1255,6 +1258,17 @@ app.get("/api/traceability/verify/:id", async (req, res, next) => {
 
 app.post("/api/blockchain/anchor/:productId", requireAuth, requireRoles(["admin", "cooperative", "verifier"]), async (req: AuthedRequest, res, next) => {
   try {
+    const { data: product, error: productError } = await supabase
+      .from("products")
+      .select("id, cooperative_id")
+      .eq("id", req.params.productId)
+      .maybeSingle();
+    if (productError) throw productError;
+    if (!product) return res.status(404).json({ error: "Producto no encontrado." });
+    if (!canAccessCooperative(req, product.cooperative_id)) {
+      return res.status(403).json({ error: "No puedes anclar productos de otra cooperativa." });
+    }
+
     const { data: stages, error } = await supabase
       .from("traceability_stages")
       .select("*")
@@ -1357,6 +1371,9 @@ app.post("/api/resources/:id/movement", requireAuth, requireRoles(["cooperative"
 
     const { data: resource } = await supabase.from("shared_resources").select("*").eq("id", req.params.id).maybeSingle();
     if (!resource) return res.status(404).json({ error: "Recurso no encontrado." });
+    if (!canAccessCooperative(req, resource.cooperative_id)) {
+      return res.status(403).json({ error: "No puedes modificar recursos de otra cooperativa." });
+    }
 
     const currentQty = Number(resource.quantity || 0);
     const newQuantity = Math.max(type === "in" ? currentQty + quantity : currentQty - quantity, 0);
@@ -2396,6 +2413,10 @@ app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, 
       .eq("id", cooperativeId)
       .maybeSingle();
 
+    if (profile.role !== "admin" && !canAccessCooperative(req, cooperativeId)) {
+      return res.status(403).json({ error: "No puedes consultar el reporte de otra cooperativa." });
+    }
+
     const { data: coopProducts } = await supabase
       .from("products")
       .select("id, name, status, producer_name, producer_id, category")
@@ -2413,11 +2434,20 @@ app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, 
       (order.order_items || []).some((item: any) => coopProductIds.has(item.product_id)),
     );
 
-    const { data: reservations } = await supabase
-      .from("resource_reservations")
-      .select("id, resource_name, user_name, status, start_date, end_date")
-      .order("created_at", { ascending: false })
-      .limit(50);
+    const { data: resources } = await supabase
+      .from("shared_resources")
+      .select("id")
+      .eq("cooperative_id", cooperativeId);
+    const resourceIds = (resources || []).map((r: any) => r.id);
+
+    const { data: reservations } = resourceIds.length > 0
+      ? await supabase
+          .from("resource_reservations")
+          .select("id, resource_name, user_name, status, start_date, end_date")
+          .in("resource_id", resourceIds)
+          .order("created_at", { ascending: false })
+          .limit(50)
+      : { data: [] };
 
     const totalOrders = relevantOrders.length;
     const totalRevenue = relevantOrders.reduce((s: number, o: any) => s + money(o.subtotal), 0);
