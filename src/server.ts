@@ -2463,9 +2463,7 @@ app.get("/api/settlements/producer", requireAuth, requireRoles(["producer"]), as
     const paidAmount = (settlements || [])
       .filter((row: any) => row.status === "paid")
       .reduce((sum: number, row: any) => sum + money(row.amount), 0);
-    const pendingAmount = eligibleAmount + (settlements || [])
-      .filter((row: any) => row.status === "pending")
-      .reduce((sum: number, row: any) => sum + money(row.amount), 0);
+    const pendingAmount = eligibleAmount;
 
     return res.json({
       period_start: from,
