@@ -780,6 +780,18 @@ app.post("/api/products", requireAuth, requireRoles(["producer", "cooperative", 
     if (!cooperative) return res.status(404).json({ error: "Cooperativa no encontrada." });
 
     const price = money(req.body.price);
+    const requestedStock = Number(req.body.stock ?? 1);
+    const requestedCraftHours = Number(req.body.craftHours ?? 0);
+    const requestedCommunityFund = Number(req.body.communityFund ?? 0);
+    const requestedPlatformCommission = Number(req.body.platformCommission ?? 0);
+    const requestedMaterialsCost = Number(req.body.materialsCost ?? 0);
+    if (!Number.isFinite(price) || price <= 0) return res.status(400).json({ error: "El precio debe ser mayor que cero." });
+    if (!Number.isFinite(requestedStock) || requestedStock < 0) return res.status(400).json({ error: "Las existencias no pueden ser negativas." });
+    if (!Number.isFinite(requestedCraftHours) || requestedCraftHours <= 0) return res.status(400).json({ error: "Las horas de trabajo deben ser mayores que cero." });
+    if (!Number.isFinite(requestedCommunityFund) || requestedCommunityFund < 0) return res.status(400).json({ error: "La aportación al fondo no puede ser negativa." });
+    if (!Number.isFinite(requestedPlatformCommission) || requestedPlatformCommission < 0) return res.status(400).json({ error: "La comisión de plataforma no puede ser negativa." });
+    if (!Number.isFinite(requestedMaterialsCost) || requestedMaterialsCost < 0) return res.status(400).json({ error: "El costo de materiales no puede ser negativo." });
+
     const materialItems = (Array.isArray(req.body.materialItems) ? req.body.materialItems : [])
       .map((item: any) => ({
         name: assertString(item.name),
@@ -818,14 +830,14 @@ app.post("/api/products", requireAuth, requireRoles(["producer", "cooperative", 
       category: assertString(req.body.category, "Textiles bordados"),
       price,
       materials,
-      craft_hours: money(req.body.craftHours),
+      craft_hours: requestedCraftHours,
       producer_id: producerId || producer?.id || "prod-1",
       producer_name: producer?.name || req.profile!.full_name,
       community: producer?.community || req.profile!.community || "San Felipe del Progreso",
       cooperative_id: cooperativeId,
       cooperative_name: cooperative?.name || "Cooperativa local",
       image: primaryImage,
-      stock: Number(req.body.stock || 1),
+      stock: requestedStock,
       status: req.profile!.role === "producer" ? "pending" : "verified",
       trace_code: traceCode,
       qr_payload: url,
@@ -1180,6 +1192,9 @@ app.post("/api/products/:id/confirm-receipt", requireAuth, async (req: AuthedReq
     if (!order) {
       return res.status(403).json({ error: "Solo el cliente que compró esta pieza puede confirmar recibido y reclamar recompensa." });
     }
+    if (!["shipped", "delivered"].includes(order.fulfillment_status)) {
+      return res.status(409).json({ error: "La recepción solo puede confirmarse después de que la orden haya sido enviada." });
+    }
 
     const { data: existing, error: existingError } = await supabase
       .from("traceability_stages")
@@ -1401,9 +1416,12 @@ app.post("/api/resources", requireAuth, requireRoles(["producer", "cooperative",
 
 app.post("/api/resources/:id/movement", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
-    const quantity = money(req.body.quantity); // Positive amount
+    const quantity = money(req.body.quantity);
     const type = req.body.type === "out" ? "out" : "in";
     const notes = assertString(req.body.notes);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return res.status(400).json({ error: "La cantidad del movimiento debe ser mayor que cero." });
+    }
 
     const { data: resource } = await supabase.from("shared_resources").select("*").eq("id", req.params.id).maybeSingle();
     if (!resource) return res.status(404).json({ error: "Recurso no encontrado." });
@@ -1412,9 +1430,20 @@ app.post("/api/resources/:id/movement", requireAuth, requireRoles(["cooperative"
     }
 
     const currentQty = Number(resource.quantity || 0);
-    const newQuantity = Math.max(type === "in" ? currentQty + quantity : currentQty - quantity, 0);
+    if (type === "out" && quantity > currentQty) {
+      return res.status(409).json({ error: "No puedes retirar más unidades de las disponibles." });
+    }
+    const newQuantity = type === "in" ? currentQty + quantity : currentQty - quantity;
 
-    await supabase.from("shared_resources").update({ quantity: newQuantity }).eq("id", req.params.id);
+    const { data: updatedResource, error: updateError } = await supabase
+      .from("shared_resources")
+      .update({ quantity: newQuantity })
+      .eq("id", req.params.id)
+      .eq("quantity", currentQty)
+      .select("*")
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (!updatedResource) return res.status(409).json({ error: "El inventario cambió mientras se registraba el movimiento. Intenta de nuevo." });
 
     const movement = {
       resource_id: req.params.id,
@@ -1522,7 +1551,7 @@ app.post("/api/resources/reservations", requireAuth, async (req: AuthedRequest, 
 
 app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
-    const status = ["approved", "completed", "cancelled"].includes(req.body.status) ? req.body.status : "pending";
+    const requestedStatus = ["approved", "completed", "cancelled"].includes(req.body.status) ? req.body.status : "pending";
 
     const { data: existing } = await supabase
       .from("resource_reservations")
@@ -1530,6 +1559,14 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
       .eq("id", req.params.id)
       .maybeSingle();
     if (!existing) return res.status(404).json({ error: "Reservación no encontrada." });
+    const status = requestedStatus;
+    const allowedTransition =
+      existing.status === status ||
+      (existing.status === "pending" && ["approved", "cancelled"].includes(status)) ||
+      (existing.status === "approved" && ["completed", "cancelled"].includes(status));
+    if (!allowedTransition) {
+      return res.status(409).json({ error: `No se puede cambiar una reservación de ${existing.status} a ${status}.` });
+    }
 
     const { data: existingResource } = await supabase
       .from("shared_resources")
@@ -1560,8 +1597,20 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
           .select("quantity")
           .eq("id", resourceId)
           .maybeSingle();
-        const newQty = Math.max(money(resource?.quantity) - qty, 0);
-        await supabase.from("shared_resources").update({ quantity: newQty }).eq("id", resourceId);
+        const currentQty = money(resource?.quantity);
+        if (qty > currentQty) {
+          return res.status(409).json({ error: "No hay inventario suficiente para aprobar esta reservación." });
+        }
+        const newQty = currentQty - qty;
+        const { data: updatedResource, error: updateError } = await supabase
+          .from("shared_resources")
+          .update({ quantity: newQty })
+          .eq("id", resourceId)
+          .eq("quantity", currentQty)
+          .select("id")
+          .maybeSingle();
+        if (updateError) throw updateError;
+        if (!updatedResource) return res.status(409).json({ error: "El inventario cambió mientras se aprobaba la reservación." });
         await supabase.from("inventory_movements").insert({
           resource_id: resourceId,
           type: "loan",
