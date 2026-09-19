@@ -995,6 +995,87 @@ export default function App() {
   }
 
   async function downloadProducerReport() {
+    try {
+      await downloadAuthenticatedPdf(
+        "/api/reports/producer.pdf",
+        "jnatjo-reporte-productor.pdf",
+        "Reporte del productor descargado correctamente.",
+      );
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo generar el reporte del productor."));
+    }
+  }
+
+  async function downloadCoopReport() {
+    try {
+      await downloadAuthenticatedPdf(
+        "/api/reports/cooperative.pdf",
+        "jnatjo-reporte-cooperativa.pdf",
+        "Reporte de cooperativa descargado correctamente.",
+      );
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo generar el reporte de la cooperativa."));
+    }
+  }
+
+  async function downloadAuthenticatedPdf(
+    path: string,
+    filename: string,
+    successMessage = "Reporte descargado correctamente.",
+  ) {
+    const response = await fetch(path, { headers: await authHeaders() });
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const body = contentType.includes("application/json") ? await response.json() : await response.text();
+        detail = typeof body === "string" ? body : body.error || "";
+      } catch {
+        detail = "";
+      }
+      throw new Error(detail || ("No se pudo generar el reporte (" + response.status + ")."));
+    }
+    if (!contentType.includes("application/pdf")) {
+      throw new Error("El servidor no devolvió un PDF válido.");
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setAuthMessage(successMessage);
+  }
+
+  async function downloadProductQr(product: Product, orderId?: string) {
+    const response = await fetch(`/api/products/${product.id}/qr.png`);
+    if (!response.ok) {
+      setAuthMessage("No se pudo generar el QR de trazabilidad.");
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const safeName = product.name
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase();
+    link.href = url;
+    link.download = `qr-${safeName || "producto"}-${orderId ? orderId.slice(0, 8) : product.traceCode}.png`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setAuthMessage("QR descargado como imagen PNG.");
+  }
+
+  async function downloadProducerReport() {
     const headers = await authHeaders();
     const response = await fetch("/api/reports/producer.pdf", { headers });
     if (!response.ok) {
