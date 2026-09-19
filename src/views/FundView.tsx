@@ -1,5 +1,6 @@
 import React, { FormEvent } from "react";
-import { CircleDollarSign, FileText } from "lucide-react";
+import { CircleDollarSign } from "lucide-react";
+import ReportCard from "../components/ReportCard";
 import { CommunityFundMovement } from "../types";
 
 interface FundViewProps {
@@ -17,19 +18,18 @@ export default function FundView({ balance, movements, canManage, onExpense, onC
       <div className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
         <h2 className="mb-4 text-lg font-serif font-bold text-[#2D2D2A]">Transparencia de Recursos Comunitarios</h2>
 
-        <div className="mb-5 rounded-2xl bg-[#2D2D2A] p-5 text-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <p className="text-[10px] uppercase tracking-widest text-[#CFCAC2] font-mono">Fondo Comunal Acumulado</p>
-            <p className="text-3xl font-black mt-1 font-sans">${balance.toLocaleString("es-MX")} MXN</p>
-          </div>
-          <button
-            type="button"
-            onClick={onDownloadReport}
-            className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-xs font-bold text-[#2D2D2A] hover:bg-[#FAF8F5] transition-all"
-          >
-            <FileText className="h-4 w-4" />
-            Descargar Reporte PDF
-          </button>
+        <div className="mb-5 rounded-2xl bg-[#2D2D2A] p-5 text-white">
+          <p className="text-[10px] uppercase tracking-widest text-[#CFCAC2] font-mono">Fondo Comunal Acumulado</p>
+          <p className="mt-1 font-sans text-3xl font-black">${balance.toLocaleString("es-MX")} MXN</p>
+        </div>
+
+        <div className="mb-5">
+          <ReportCard
+            title="Reporte financiero del fondo"
+            description="PDF con ingresos, egresos y balance acumulado del fondo comunitario de tu cooperativa."
+            buttonLabel="Generar y descargar PDF"
+            onDownload={onDownloadReport}
+          />
         </div>
 
         <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
