@@ -2654,7 +2654,8 @@ app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedReques
     if (req.profile!.role !== "admin") {
       query = query.eq("cooperative_id", req.profile!.cooperative_id || "__none__");
     }
-    const { data } = await query;
+    const { data, error: fundError } = await query;
+    if (fundError) throw fundError;
     const doc = new jsPDF();
     doc.setFontSize(18);
     doc.text("Jnatjo Market - Reporte de Fondo Comunitario", 14, 18);
@@ -2684,16 +2685,30 @@ app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedReques
 app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const profile = req.profile!;
-    let producerId: string;
+    let producerId = "";
     if (profile.role === "producer") {
-      producerId = req.user!.id;
+      const { data: ownProducer, error: ownProducerError } = await supabase
+        .from("producers")
+        .select("id, name, community, cooperative_id")
+        .or(`id.eq.${req.user!.id},user_id.eq.${req.user!.id}`)
+        .maybeSingle();
+      if (ownProducerError) throw ownProducerError;
+      if (!ownProducer) {
+        return res.status(404).json({ error: "No se encontró un registro de productor vinculado a tu cuenta." });
+      }
+      producerId = ownProducer.id;
     } else if (profile.role === "admin") {
       producerId = assertString(req.query.producerId);
-      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
+      if (!producerId) return res.status(400).json({ error: "Selecciona un productor para generar el reporte." });
     } else if (["cooperative", "inventory_manager", "logistics", "verifier"].includes(profile.role)) {
       producerId = assertString(req.query.producerId);
-      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
-      const { data: scopedProducer } = await supabase.from("producers").select("cooperative_id").eq("id", producerId).maybeSingle();
+      if (!producerId) return res.status(400).json({ error: "Selecciona un productor para generar el reporte." });
+      const { data: scopedProducer, error: scopedProducerError } = await supabase
+        .from("producers")
+        .select("cooperative_id")
+        .eq("id", producerId)
+        .maybeSingle();
+      if (scopedProducerError) throw scopedProducerError;
       if (!scopedProducer || !canAccessCooperative(req, scopedProducer.cooperative_id)) {
         return res.status(403).json({ error: "No puedes consultar el reporte de otro ámbito operativo." });
       }
@@ -2701,25 +2716,29 @@ app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res
       return res.status(403).json({ error: "No tienes permiso para consultar reportes de productores." });
     }
 
-    const { data: producer } = await supabase
+    const { data: producer, error: producerError } = await supabase
       .from("producers")
       .select("id, name, community, cooperative_id")
       .eq("id", producerId)
       .maybeSingle();
+    if (producerError) throw producerError;
+    if (!producer) return res.status(404).json({ error: "Productor no encontrado." });
 
-    const { data: productsRows } = await supabase
+    const { data: productsRows, error: productsError } = await supabase
       .from("products")
       .select("id, name, status, trace_code, price, category")
       .eq("producer_id", producerId);
+    if (productsError) throw productsError;
 
     const productIds = (productsRows || []).map((p: any) => p.id);
 
     let salesItems: any[] = [];
     if (productIds.length > 0) {
-      const { data: items } = await supabase
+      const { data: items, error: itemsError } = await supabase
         .from("order_items")
         .select("id, product_id, product_name, quantity, unit_price, producer_pay, community_fund, orders(id, status, customer_name, customer_email, created_at)")
         .in("product_id", productIds);
+      if (itemsError) throw itemsError;
       salesItems = (items || []).filter((item: any) =>
         ["paid", "shipped", "delivered"].includes(item.orders?.status),
       );
@@ -2867,47 +2886,55 @@ app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, 
       return res.status(403).json({ error: "No tienes permiso para consultar reportes de cooperativas." });
     }
 
-    const { data: coop } = await supabase
+    const { data: coop, error: coopError } = await supabase
       .from("cooperatives")
       .select("id, name, municipality, community, representative")
       .eq("id", cooperativeId)
       .maybeSingle();
+    if (coopError) throw coopError;
+    if (!coop) return res.status(404).json({ error: "Cooperativa no encontrada." });
 
     if (profile.role !== "admin" && !canAccessCooperative(req, cooperativeId)) {
       return res.status(403).json({ error: "No puedes consultar el reporte de otra cooperativa." });
     }
 
-    const { data: coopProducts } = await supabase
+    const { data: coopProducts, error: coopProductsError } = await supabase
       .from("products")
       .select("id, name, status, producer_name, producer_id, category")
       .eq("cooperative_id", cooperativeId);
+    if (coopProductsError) throw coopProductsError;
 
     const coopProductIds = new Set((coopProducts || []).map((p: any) => p.id));
 
-    const { data: allOrders } = await supabase
+    const { data: allOrders, error: allOrdersError } = await supabase
       .from("orders")
       .select("id, status, customer_name, customer_email, subtotal, producer_total, community_fund_total, platform_commission_total, fulfillment_status, created_at, order_items(product_id, product_name, quantity, unit_price, producer_pay, community_fund)")
       .in("status", ["paid", "shipped", "delivered"])
       .order("created_at", { ascending: false });
+    if (allOrdersError) throw allOrdersError;
 
     const relevantOrders = (allOrders || []).filter((order: any) =>
       (order.order_items || []).some((item: any) => coopProductIds.has(item.product_id)),
     );
 
-    const { data: resources } = await supabase
+    const { data: resources, error: resourcesError } = await supabase
       .from("shared_resources")
       .select("id")
       .eq("cooperative_id", cooperativeId);
+    if (resourcesError) throw resourcesError;
     const resourceIds = (resources || []).map((r: any) => r.id);
 
-    const { data: reservations } = resourceIds.length > 0
-      ? await supabase
-          .from("resource_reservations")
-          .select("id, resource_name, user_name, status, start_date, end_date")
-          .in("resource_id", resourceIds)
-          .order("created_at", { ascending: false })
-          .limit(50)
-      : { data: [] };
+    let reservations: any[] = [];
+    if (resourceIds.length > 0) {
+      const { data: reservationRows, error: reservationsError } = await supabase
+        .from("resource_reservations")
+        .select("id, resource_name, user_name, status, start_date, end_date")
+        .in("resource_id", resourceIds)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (reservationsError) throw reservationsError;
+      reservations = reservationRows || [];
+    }
 
     const totalOrders = relevantOrders.length;
     const totalRevenue = relevantOrders.reduce((s: number, o: any) => s + money(o.subtotal), 0);
