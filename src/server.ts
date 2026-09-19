@@ -487,6 +487,21 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
 
     const event = stripe.webhooks.constructEvent(req.body, signature, STRIPE_WEBHOOK_SECRET);
 
+    if (event.type === "checkout.session.expired" || event.type === "checkout.session.async_payment_failed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const orderId = session.metadata?.orderId;
+      if (orderId) {
+        const { data: order } = await supabase
+          .from("orders")
+          .select("id, customer_id, status")
+          .eq("id", orderId)
+          .maybeSingle();
+        if (order && order.status === "pending") {
+          await releaseCheckoutRewardRedemption(orderId, order.customer_id || undefined);
+        }
+      }
+    }
+
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
       const orderId = session.metadata?.orderId;
@@ -1742,6 +1757,40 @@ app.post("/api/community-fund/movements/:id/confirm", requireAuth, requireRoles(
       .single();
     if (error) throw error;
     res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function releaseCheckoutRewardRedemption(orderId: string, userId?: string) {
+  const query = supabase
+    .from("customer_reward_redemptions")
+    .delete()
+    .eq("order_id", orderId);
+  if (userId) query.eq("customer_id", userId);
+  const { error } = await query;
+  if (error && error.code !== "42P01") throw error;
+}
+
+app.post("/api/checkout/cancel", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const orderId = assertString(req.body.orderId);
+    if (!orderId) return res.status(400).json({ error: "Falta el ID de la orden." });
+
+    const { data: order, error } = await supabase
+      .from("orders")
+      .select("id, customer_id, status, stripe_checkout_session_id")
+      .eq("id", orderId)
+      .eq("customer_id", req.user!.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!order) return res.status(404).json({ error: "Orden no encontrada." });
+    if (["paid", "shipped", "delivered"].includes(order.status)) {
+      return res.status(409).json({ error: "Una orden pagada no puede liberar el canje de puntos desde esta ruta." });
+    }
+
+    await releaseCheckoutRewardRedemption(orderId, req.user!.id);
+    res.json({ success: true });
   } catch (error) {
     next(error);
   }
