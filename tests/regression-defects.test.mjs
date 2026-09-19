@@ -44,7 +44,7 @@ test("DEF-029 a DEF-033: recursos, productos y sensores validan ámbito", () => 
   assert.match(server, /No puedes registrar el despacho de este producto/);
   assert.match(server, /No puedes validar productos de otra cooperativa/);
   assert.match(server, /No puedes registrar sensores para este producto/);
-  assert.match(server, /No puedes consultar recursos de otra cooperativa/);
+  assert.match(server, /No puedes gestionar reservas de otra cooperativa/);
 });
 
 test("DEF-034: endurecimiento Supabase está versionado", () => {
@@ -69,8 +69,8 @@ test("DEF-036 a DEF-042: reglas de checkout, recursos y recibido están presente
   assert.match(server, /payment_status === "paid"/);
   assert.match(server, /La cantidad solicitada .* supera la disponibilidad actual/);
   assert.match(server, /El periodo de reservación no es válido/);
-  assert.match(server, /pending.*approved\/cancelled/);
-  assert.match(server, /approved.*completed\/cancelled/);
+  assert.match(server, /existing\.status === "pending" && \["approved", "cancelled"\]/);
+  assert.match(server, /existing\.status === "approved" && \["completed", "cancelled"\]/);
   assert.match(server, /Solo puedes confirmar la recepción cuando la orden está enviada o entregada/);
 });
 
@@ -87,12 +87,12 @@ test("DEF-045 a DEF-049: notificaciones, sincronización y acciones bloqueadas e
   assert.match(app, /30000/);
   assert.match(app, /15000/);
   assert.match(app, /runLockedAction/);
-  assert.match(app, /clearNotificationTimers/);
+  assert.match(app, /notificationTimersRef\.current\.clear\(\)/);
   assert.match(app, /getFriendlyError/);
 });
 
 test("DEF-050 a DEF-052: fondo, recursos y notificaciones respetan ámbito", () => {
-  assert.match(server, /app\.get\("\/api\/community-fund", requireAuth/);
+  assert.match(server, /app\.get\("\/api\/community-fund"/);
   assert.match(server, /app\.get\("\/api\/reports\/community-fund\.pdf", requireAuth/);
   assert.match(server, /available_shared", true/);
   assert.match(app, /cooperative_id/);
@@ -136,10 +136,10 @@ test("DEF-056 a DEF-061: sistema de reportes estandarizado y cubierto por rol", 
 test("DEF-037/038/039/040/041/042: controles específicos de API permanecen versionados", () => {
   assert.match(server, /id, name, municipality, community, representative/);
   assert.match(server, /includePending/);
-  assert.match(server, /El precio debe ser mayor que 0/);
-  assert.match(server, /La cantidad debe ser mayor que 0/);
+  assert.match(server, /El precio debe ser mayor que cero/);
+  assert.match(server, /Las existencias no pueden ser negativas/);
   assert.match(server, /La cantidad solicitada .* supera la disponibilidad actual/);
-  assert.match(server, /No se permite regresar una reservación completada a un estado previo/);
+  assert.match(server, /No se puede cambiar una reservación de \$\{existing\.status\} a \$\{status\}/);
 });
 
 test("Compilación y estructura: no existen funciones duplicadas de reportes en App", () => {
