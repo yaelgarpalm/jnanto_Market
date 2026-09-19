@@ -71,7 +71,7 @@ test("DEF-036 a DEF-042: reglas de checkout, recursos y recibido están presente
   assert.match(server, /El periodo de reservación no es válido/);
   assert.match(server, /existing\.status === "pending" && \["approved", "cancelled"\]/);
   assert.match(server, /existing\.status === "approved" && \["completed", "cancelled"\]/);
-  assert.match(server, /Solo puedes confirmar la recepción cuando la orden está enviada o entregada/);
+  assert.match(server, /La recepción solo puede confirmarse después de que la orden haya sido enviada/);
 });
 
 test("DEF-043/DEF-044: liquidaciones de productor y cooperativa existen", () => {
