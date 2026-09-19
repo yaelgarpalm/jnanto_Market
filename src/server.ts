@@ -2849,16 +2849,17 @@ app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedReques
 app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const profile = req.profile!;
-    let producerId: string;
+    let producerId = "";
     if (profile.role === "producer") {
       producerId = req.user!.id;
     } else if (profile.role === "admin") {
       producerId = assertString(req.query.producerId);
-      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
+      if (!producerId) return res.status(400).json({ error: "Selecciona un productor para generar el reporte." });
     } else if (["cooperative", "inventory_manager", "logistics", "verifier"].includes(profile.role)) {
       producerId = assertString(req.query.producerId);
-      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
-      const { data: scopedProducer } = await supabase.from("producers").select("cooperative_id").eq("id", producerId).maybeSingle();
+      if (!producerId) return res.status(400).json({ error: "Selecciona un productor para generar el reporte." });
+      const { data: scopedProducer, error } = await supabase.from("producers").select("cooperative_id").eq("id", producerId).maybeSingle();
+      if (error) throw error;
       if (!scopedProducer || !canAccessCooperative(req, scopedProducer.cooperative_id)) {
         return res.status(403).json({ error: "No puedes consultar el reporte de otro ámbito operativo." });
       }
@@ -2881,141 +2882,69 @@ app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res
     if (productsError) throw productsError;
 
     const productIds = (productsRows || []).map((p: any) => p.id);
-
     let salesItems: any[] = [];
-    if (productIds.length > 0) {
-      const { data: items, error: itemsError } = await supabase
+    if (productIds.length) {
+      const { data: items, error } = await supabase
         .from("order_items")
-        .select("id, product_id, product_name, quantity, unit_price, producer_pay, community_fund, orders(id, status, customer_name, customer_email, created_at)")
+        .select("id, product_id, product_name, quantity, unit_price, producer_pay, community_fund, orders(id, status, created_at)")
         .in("product_id", productIds);
-      if (itemsError) throw itemsError;
-      salesItems = (items || []).filter((item: any) =>
-        ["paid", "shipped", "delivered"].includes(item.orders?.status),
-      );
+      if (error) throw error;
+      salesItems = (items || []).filter((item: any) => ["paid", "shipped", "delivered"].includes(item.orders?.status));
     }
 
-    const totalSales = salesItems.reduce((s: number, i: any) => s + money(i.unit_price) * money(i.quantity), 0);
-    const totalProducerPay = salesItems.reduce((s: number, i: any) => s + money(i.producer_pay), 0);
-    const totalCommunityFund = salesItems.reduce((s: number, i: any) => s + money(i.community_fund), 0);
-    const totalUnits = salesItems.reduce((s: number, i: any) => s + money(i.quantity), 0);
+    const totalSales = salesItems.reduce((sum, item) => sum + money(item.unit_price) * money(item.quantity), 0);
+    const totalProducerPay = salesItems.reduce((sum, item) => sum + money(item.producer_pay), 0);
+    const totalFund = salesItems.reduce((sum, item) => sum + money(item.community_fund), 0);
+    const totalUnits = salesItems.reduce((sum, item) => sum + money(item.quantity), 0);
+    const verified = (productsRows || []).filter((p: any) => p.status === "verified").length;
 
     const doc = new jsPDF();
-    const pageW = 210;
+    let y = drawStandardHeader(doc, "Reporte del productor", "Ventas, piezas y pago justo", producer.name || "Productor", "Histórico");
+    y = drawStandardMetrics(doc, [
+      { label: "VENTAS", value: reportMoney(totalSales) },
+      { label: "PAGO PRODUCTOR", value: reportMoney(totalProducerPay) },
+      { label: "FONDO", value: reportMoney(totalFund) },
+      { label: "UNIDADES", value: String(totalUnits) },
+    ], y) + 3;
 
-    // Header band
-    doc.setFillColor(45, 45, 42);
-    doc.rect(0, 0, pageW, 30, "F");
-    doc.setFillColor(90, 106, 66);
-    doc.rect(0, 30, pageW, 2, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(17);
-    doc.text("JNATJO MARKET", 14, 13);
-    doc.setFontSize(9);
-    doc.text("Reporte Personalizado del Productor", 14, 22);
-    const genDate = new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
-    doc.text(`Generado: ${genDate}`, pageW - 14, 22, { align: "right" });
-
-    let y = 40;
-    doc.setTextColor(45, 45, 42);
-    doc.setFontSize(14);
-    doc.text(producer?.name || profile.full_name || "Productor", 14, y);
-    y += 6;
+    y = drawStandardSection(doc, "Resumen de piezas", y);
     doc.setFontSize(8);
-    doc.setTextColor(107, 102, 95);
-    if (producer?.community) doc.text(`Comunidad: ${producer.community}`, 14, y);
-    y += 12;
+    doc.setTextColor(...REPORT_DARK);
+    doc.text("Registradas: " + (productsRows || []).length + " · verificadas: " + verified + " · pendientes: " + ((productsRows || []).length - verified), 14, y);
+    y += 10;
 
-    // Summary metrics
-    const boxW = (pageW - 28 - 9) / 4;
-    const metrics = [
-      { label: "VENTAS TOTALES", value: `$${totalSales.toLocaleString("es-MX")}` },
-      { label: "PAGO AL PRODUCTOR", value: `$${totalProducerPay.toLocaleString("es-MX")}` },
-      { label: "FONDO COMUNITARIO", value: `$${totalCommunityFund.toLocaleString("es-MX")}` },
-      { label: "UNIDADES VENDIDAS", value: String(totalUnits) },
-    ];
-    for (let i = 0; i < metrics.length; i++) {
-      const bx = 14 + i * (boxW + 3);
-      doc.setFillColor(250, 248, 245);
-      doc.setDrawColor(230, 226, 218);
-      doc.rect(bx, y, boxW, 22, "FD");
-      doc.setFontSize(6.5);
-      doc.setTextColor(107, 102, 95);
-      doc.text(metrics[i].label, bx + 3, y + 7);
-      doc.setFontSize(11);
-      doc.setTextColor(45, 45, 42);
-      doc.text(metrics[i].value, bx + 3, y + 17);
-    }
-    y += 30;
-
-    // Products section
-    doc.setFontSize(10);
-    doc.setTextColor(45, 45, 42);
-    doc.text("Piezas Registradas", 14, y);
-    y += 4;
-    doc.setFillColor(90, 106, 66);
-    doc.rect(14, y, pageW - 28, 0.5, "F");
-    y += 7;
-    doc.setFontSize(8);
-    doc.setTextColor(107, 102, 95);
-    const totalReg = (productsRows || []).length;
-    const totalVerif = (productsRows || []).filter((p: any) => p.status === "verified").length;
-    doc.text(`Total registradas: ${totalReg}  |  Verificadas: ${totalVerif}  |  Pendientes: ${totalReg - totalVerif}`, 14, y);
-    y += 12;
-
-    // Sales table
-    doc.setFontSize(10);
-    doc.setTextColor(45, 45, 42);
-    doc.text("Detalle de Ventas Confirmadas", 14, y);
-    y += 4;
-    doc.setFillColor(90, 106, 66);
-    doc.rect(14, y, pageW - 28, 0.5, "F");
-    y += 8;
-
-    // Table header row
-    const cols = [14, 34, 62, 130, 152, 175];
-    const headers = ["FECHA", "ORDEN", "PRODUCTO", "CANT.", "PRECIO U.", "PAGO PROD."];
-    doc.setFillColor(239, 237, 231);
-    doc.rect(14, y - 5, pageW - 28, 7, "F");
-    doc.setFontSize(7);
-    doc.setTextColor(107, 102, 95);
-    for (let i = 0; i < headers.length; i++) {
-      doc.text(headers[i], cols[i], y);
-    }
-    y += 5;
-
-    if (salesItems.length === 0) {
+    y = drawStandardSection(doc, "Ventas confirmadas", y);
+    const cols = [14, 38, 78, 132, 157, 184];
+    y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "PRODUCTO", "CANT.", "PRECIO", "PAGO"], cols, y);
+    if (!salesItems.length) {
       doc.setFontSize(8);
-      doc.setTextColor(138, 132, 124);
-      doc.text("No hay ventas confirmadas registradas aun.", 14, y + 6);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No hay ventas confirmadas para mostrar.", 14, y + 6);
     } else {
-      doc.setFontSize(7.5);
       for (const item of salesItems) {
-        if (y > 270) { doc.addPage(); y = 18; }
-        const d = new Date(item.orders?.created_at || "");
-        const dateStr = Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
-        doc.setTextColor(107, 102, 95);
-        doc.text(dateStr, cols[0], y);
-        doc.setTextColor(45, 45, 42);
-        doc.text((item.orders?.id || "").slice(0, 8).toUpperCase(), cols[1], y);
-        doc.text((item.product_name || "").slice(0, 34), cols[2], y);
-        doc.text(String(item.quantity), cols[3], y);
-        doc.text(`$${money(item.unit_price).toLocaleString("es-MX")}`, cols[4], y);
-        doc.setTextColor(90, 106, 66);
-        doc.text(`$${money(item.producer_pay).toLocaleString("es-MX")}`, cols[5], y);
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Ventas confirmadas · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "PRODUCTO", "CANT.", "PRECIO", "PAGO"], cols, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(item.orders?.created_at), cols[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(item.orders?.id || "—").slice(0, 8).toUpperCase(), cols[1], y);
+        doc.text(String(item.product_name || "—").slice(0, 28), cols[2], y);
+        doc.text(String(item.quantity || 0), cols[3], y);
+        doc.text(reportMoney(item.unit_price), cols[4], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(reportMoney(item.producer_pay), cols[5], y, { align: "right" });
         y += 7;
-        doc.setDrawColor(230, 226, 218);
-        doc.line(14, y - 2, pageW - 14, y - 2);
       }
     }
-
-    y += 10;
-    doc.setFontSize(7);
-    doc.setTextColor(138, 132, 124);
-    doc.text("Jnatjo Market - Comercio Justo y Trazabilidad Artesanal", 14, y);
+    drawStandardFooter(doc);
 
     const pdf = Buffer.from(doc.output("arraybuffer"));
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline; filename=jnatjo-reporte-productor.pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-productor.pdf");
     res.send(pdf);
   } catch (error) {
     next(error);
@@ -3025,15 +2954,17 @@ app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res
 app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const profile = req.profile!;
-    let cooperativeId: string;
+    let cooperativeId = "";
     if (profile.role === "admin") {
       cooperativeId = assertString(req.query.cooperativeId);
-      if (!cooperativeId) return res.status(400).json({ error: "Indica la cooperativa para generar el reporte." });
+      if (!cooperativeId) return res.status(400).json({ error: "Selecciona una cooperativa para generar el reporte." });
     } else if (["cooperative", "verifier", "inventory_manager", "logistics"].includes(profile.role)) {
       cooperativeId = profile.cooperative_id || "";
-      if (!cooperativeId) return res.status(403).json({ error: "Tu cuenta no tiene una cooperativa asignada." });
     } else {
       return res.status(403).json({ error: "No tienes permiso para consultar reportes de cooperativas." });
+    }
+    if (!cooperativeId || !canAccessCooperative(req, cooperativeId)) {
+      return res.status(403).json({ error: "No puedes consultar el reporte de otra cooperativa." });
     }
 
     const { data: coop, error: coopError } = await supabase
@@ -3044,201 +2975,118 @@ app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, 
     if (coopError) throw coopError;
     if (!coop) return res.status(404).json({ error: "Cooperativa no encontrada." });
 
-    if (profile.role !== "admin" && !canAccessCooperative(req, cooperativeId)) {
-      return res.status(403).json({ error: "No puedes consultar el reporte de otra cooperativa." });
-    }
-
-    const { data: coopProducts, error: coopProductsError } = await supabase
+    const { data: productsRows, error: productError } = await supabase
       .from("products")
       .select("id, name, status, producer_name, producer_id, category")
       .eq("cooperative_id", cooperativeId);
-    if (coopProductsError) throw coopProductsError;
+    if (productError) throw productError;
 
-    const coopProductIds = new Set((coopProducts || []).map((p: any) => p.id));
-
-    const { data: allOrders, error: allOrdersError } = await supabase
-      .from("orders")
-      .select("id, status, customer_name, customer_email, subtotal, producer_total, community_fund_total, platform_commission_total, fulfillment_status, created_at, order_items(product_id, product_name, quantity, unit_price, producer_pay, community_fund)")
-      .in("status", ["paid", "shipped", "delivered"])
-      .order("created_at", { ascending: false });
-    if (allOrdersError) throw allOrdersError;
-
-    const relevantOrders = (allOrders || []).filter((order: any) =>
-      (order.order_items || []).some((item: any) => coopProductIds.has(item.product_id)),
-    );
-
-    const { data: resources, error: resourcesError } = await supabase
-      .from("shared_resources")
-      .select("id")
-      .eq("cooperative_id", cooperativeId);
-    if (resourcesError) throw resourcesError;
-    const resourceIds = (resources || []).map((r: any) => r.id);
-
-    let reservations: any[] = [];
-    if (resourceIds.length > 0) {
-      const { data: reservationRows, error: reservationsError } = await supabase
-        .from("resource_reservations")
-        .select("id, resource_name, user_name, status, start_date, end_date")
-        .in("resource_id", resourceIds)
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (reservationsError) throw reservationsError;
-      reservations = reservationRows || [];
+    const productIds = (productsRows || []).map((p: any) => p.id);
+    let orders: any[] = [];
+    if (productIds.length) {
+      const { data: orderRows, error } = await supabase
+        .from("orders")
+        .select("id, status, subtotal, producer_total, community_fund_total, platform_commission_total, fulfillment_status, created_at, order_items(product_id)")
+        .in("status", ["paid", "shipped", "delivered"])
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      const ids = new Set(productIds);
+      orders = (orderRows || []).filter((order: any) => (order.order_items || []).some((item: any) => ids.has(item.product_id)));
     }
 
-    const totalOrders = relevantOrders.length;
-    const totalRevenue = relevantOrders.reduce((s: number, o: any) => s + money(o.subtotal), 0);
-    const totalProducerPay = relevantOrders.reduce((s: number, o: any) => s + money(o.producer_total), 0);
-    const totalFund = relevantOrders.reduce((s: number, o: any) => s + money(o.community_fund_total), 0);
-    const totalPlatform = relevantOrders.reduce((s: number, o: any) => s + money(o.platform_commission_total), 0);
-    const totalProducts = (coopProducts || []).length;
-    const verifiedProducts = (coopProducts || []).filter((p: any) => p.status === "verified").length;
+    const revenue = orders.reduce((sum, row) => sum + money(row.subtotal), 0);
+    const producerPay = orders.reduce((sum, row) => sum + money(row.producer_total), 0);
+    const fund = orders.reduce((sum, row) => sum + money(row.community_fund_total), 0);
+    const commission = orders.reduce((sum, row) => sum + money(row.platform_commission_total), 0);
+    const verified = (productsRows || []).filter((row: any) => row.status === "verified").length;
+
+    const { data: resourceRows, error: resourceError } = await supabase
+      .from("shared_resources")
+      .select("id, name, quantity, unit, low_stock_threshold")
+      .eq("cooperative_id", cooperativeId);
+    if (resourceError) throw resourceError;
+
+    const resources = resourceRows || [];
+    const lowStock = resources.filter((row: any) => money(row.quantity) <= money(row.low_stock_threshold)).length;
 
     const doc = new jsPDF();
-    const pageW = 210;
+    let y = drawStandardHeader(
+      doc,
+      "Reporte de la cooperativa",
+      "Operación, ventas y recursos comunitarios",
+      coop.name + (coop.community ? " · " + coop.community : ""),
+      "Histórico",
+    );
+    y = drawStandardMetrics(doc, [
+      { label: "ORDENES", value: String(orders.length) },
+      { label: "INGRESOS", value: reportMoney(revenue) },
+      { label: "PAGO PRODUCTORES", value: reportMoney(producerPay) },
+      { label: "FONDO", value: reportMoney(fund) },
+    ], y) + 3;
 
-    // Header band
-    doc.setFillColor(45, 45, 42);
-    doc.rect(0, 0, pageW, 30, "F");
-    doc.setFillColor(194, 132, 93);
-    doc.rect(0, 30, pageW, 2, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(17);
-    doc.text("JNATJO MARKET", 14, 13);
-    doc.setFontSize(9);
-    doc.text("Reporte de Cooperativa", 14, 22);
-    const genDate2 = new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
-    doc.text(`Generado: ${genDate2}`, pageW - 14, 22, { align: "right" });
-
-    let y = 40;
-    doc.setTextColor(45, 45, 42);
-    doc.setFontSize(14);
-    doc.text(coop?.name || "Cooperativa", 14, y);
-    y += 6;
+    y = drawStandardSection(doc, "Indicadores operativos", y);
     doc.setFontSize(8);
-    doc.setTextColor(107, 102, 95);
-    const coopMeta = [coop?.municipality, coop?.community, coop?.representative ? `Representante: ${coop.representative}` : ""].filter(Boolean).join("  |  ");
-    if (coopMeta) doc.text(coopMeta, 14, y);
-    y += 12;
-
-    // Summary metrics (2 rows of 3)
-    const mBoxW = (pageW - 28 - 6) / 3;
-    const mMetrics = [
-      { label: "ORDENES GESTIONADAS", value: String(totalOrders) },
-      { label: "INGRESOS TOTALES", value: `$${totalRevenue.toLocaleString("es-MX")}` },
-      { label: "PAGOS A PRODUCTORES", value: `$${totalProducerPay.toLocaleString("es-MX")}` },
-      { label: "FONDO COMUNITARIO", value: `$${totalFund.toLocaleString("es-MX")}` },
-      { label: "COMISION PLATAFORMA", value: `$${totalPlatform.toLocaleString("es-MX")}` },
-      { label: "PRODUCTOS REGISTRADOS", value: `${verifiedProducts}/${totalProducts} verif.` },
-    ];
-    for (let i = 0; i < mMetrics.length; i++) {
-      const row = Math.floor(i / 3);
-      const col = i % 3;
-      const bx = 14 + col * (mBoxW + 3);
-      const by = y + row * 26;
-      doc.setFillColor(250, 248, 245);
-      doc.setDrawColor(230, 226, 218);
-      doc.rect(bx, by, mBoxW, 22, "FD");
-      doc.setFontSize(6.5);
-      doc.setTextColor(107, 102, 95);
-      doc.text(mMetrics[i].label, bx + 3, by + 7);
-      doc.setFontSize(11);
-      doc.setTextColor(45, 45, 42);
-      doc.text(mMetrics[i].value, bx + 3, by + 17);
-    }
-    y += 58;
-
-    // Orders table
-    doc.setFontSize(10);
-    doc.setTextColor(45, 45, 42);
-    doc.text("Historial de Ordenes", 14, y);
-    y += 4;
-    doc.setFillColor(194, 132, 93);
-    doc.rect(14, y, pageW - 28, 0.5, "F");
-    y += 8;
-
-    const oCols = [14, 34, 82, 132, 162, 186];
-    const oHeaders = ["FECHA", "ORDEN", "CLIENTE", "TOTAL", "PROD. PAGO", "ESTADO"];
-    doc.setFillColor(239, 237, 231);
-    doc.rect(14, y - 5, pageW - 28, 7, "F");
-    doc.setFontSize(7);
-    doc.setTextColor(107, 102, 95);
-    for (let i = 0; i < oHeaders.length; i++) doc.text(oHeaders[i], oCols[i], y);
-    y += 5;
-
-    if (relevantOrders.length === 0) {
-      doc.setFontSize(8);
-      doc.setTextColor(138, 132, 124);
-      doc.text("No hay ordenes gestionadas registradas aun.", 14, y + 6);
-    } else {
-      doc.setFontSize(7);
-      for (const order of relevantOrders) {
-        if (y > 270) { doc.addPage(); y = 18; }
-        const d = new Date(order.created_at || "");
-        const dateStr = Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("es-MX", { day: "2-digit", month: "short" });
-        const customer = (order.customer_name || order.customer_email || "").slice(0, 22);
-        doc.setTextColor(107, 102, 95);
-        doc.text(dateStr, oCols[0], y);
-        doc.setTextColor(45, 45, 42);
-        doc.text(order.id.slice(0, 8).toUpperCase(), oCols[1], y);
-        doc.text(customer, oCols[2], y);
-        doc.text(`$${money(order.subtotal).toLocaleString("es-MX")}`, oCols[3], y);
-        doc.setTextColor(90, 106, 66);
-        doc.text(`$${money(order.producer_total).toLocaleString("es-MX")}`, oCols[4], y);
-        doc.setTextColor(45, 45, 42);
-        doc.text(String(order.fulfillment_status || order.status || "-").slice(0, 10), oCols[5], y);
-        y += 7;
-        doc.setDrawColor(230, 226, 218);
-        doc.line(14, y - 2, pageW - 14, y - 2);
-      }
-    }
-
-    // Reservations section
-    if (y < 240 && (reservations || []).length > 0) {
-      y += 8;
-      doc.setFontSize(10);
-      doc.setTextColor(45, 45, 42);
-      doc.text("Reservas de Maquinaria y Recursos", 14, y);
-      y += 4;
-      doc.setFillColor(194, 132, 93);
-      doc.rect(14, y, pageW - 28, 0.5, "F");
-      y += 8;
-
-      const rCols = [14, 72, 116, 152, 178];
-      const rHeaders = ["RECURSO", "SOLICITANTE", "INICIO", "FIN", "ESTADO"];
-      doc.setFillColor(239, 237, 231);
-      doc.rect(14, y - 5, pageW - 28, 7, "F");
-      doc.setFontSize(7);
-      doc.setTextColor(107, 102, 95);
-      for (let i = 0; i < rHeaders.length; i++) doc.text(rHeaders[i], rCols[i], y);
-      y += 5;
-
-      doc.setFontSize(7);
-      for (const rsv of reservations || []) {
-        if (y > 275) break;
-        const ds = new Date(rsv.start_date).toLocaleDateString("es-MX", { day: "2-digit", month: "short" });
-        const de = new Date(rsv.end_date).toLocaleDateString("es-MX", { day: "2-digit", month: "short" });
-        doc.setTextColor(45, 45, 42);
-        doc.text((rsv.resource_name || "").slice(0, 26), rCols[0], y);
-        doc.text((rsv.user_name || "").slice(0, 20), rCols[1], y);
-        doc.text(ds, rCols[2], y);
-        doc.text(de, rCols[3], y);
-        doc.setTextColor(rsv.status === "approved" ? 90 : rsv.status === "cancelled" ? 164 : 45, rsv.status === "approved" ? 106 : 45, rsv.status === "approved" ? 66 : 42);
-        doc.text(String(rsv.status || "-"), rCols[4], y);
-        y += 6;
-        doc.setDrawColor(230, 226, 218);
-        doc.line(14, y - 1.5, pageW - 14, y - 1.5);
-      }
-    }
-
+    doc.setTextColor(...REPORT_DARK);
+    doc.text(
+      "Productos: " + (productsRows || []).length +
+      " · verificados: " + verified +
+      " · recursos: " + resources.length +
+      " · stock bajo: " + lowStock +
+      " · comisión: " + reportMoney(commission),
+      14, y,
+    );
     y += 10;
-    doc.setFontSize(7);
-    doc.setTextColor(138, 132, 124);
-    doc.text("Jnatjo Market - Comercio Justo y Trazabilidad Artesanal", 14, y);
 
+    y = drawStandardSection(doc, "Ordenes gestionadas", y);
+    const cols = [14, 40, 88, 126, 160, 186];
+    y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "TOTAL", "P. PROD.", "FONDO"], cols, y);
+    if (!orders.length) {
+      doc.setFontSize(8);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No hay ordenes confirmadas para mostrar.", 14, y + 6);
+    } else {
+      for (const order of orders) {
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Ordenes gestionadas · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "TOTAL", "P. PROD.", "FONDO"], cols, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(order.created_at), cols[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(order.id).slice(0, 8).toUpperCase(), cols[1], y);
+        doc.text(String(order.fulfillment_status || order.status || "—").slice(0, 12), cols[2], y);
+        doc.text(reportMoney(order.subtotal), cols[3], y);
+        doc.text(reportMoney(order.producer_total), cols[4], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(reportMoney(order.community_fund_total), cols[5], y, { align: "right" });
+        y += 7;
+      }
+    }
+
+    y = drawStandardSection(doc, "Inventario comunitario", y + 3);
+    const rCols = [14, 100, 148, 184];
+    y = drawStandardTableHeader(doc, ["RECURSO", "CANTIDAD", "UNIDAD", "ALERTA"], rCols, y);
+    for (const row of resources) {
+      if (y > 270) {
+        doc.addPage();
+        y = drawStandardSection(doc, "Inventario comunitario · continuación", 20);
+        y = drawStandardTableHeader(doc, ["RECURSO", "CANTIDAD", "UNIDAD", "ALERTA"], rCols, y);
+      }
+      doc.setFontSize(7);
+      doc.setTextColor(...REPORT_DARK);
+      doc.text(String(row.name || "—").slice(0, 34), rCols[0], y);
+      doc.text(String(row.quantity ?? 0), rCols[1], y);
+      doc.text(String(row.unit || "—").slice(0, 12), rCols[2], y);
+      doc.text(money(row.quantity) <= money(row.low_stock_threshold) ? "STOCK BAJO" : "Normal", rCols[3], y);
+      y += 7;
+    }
+
+    drawStandardFooter(doc);
     const pdf = Buffer.from(doc.output("arraybuffer"));
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline; filename=jnatjo-reporte-cooperativa.pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-cooperativa.pdf");
     res.send(pdf);
   } catch (error) {
     next(error);
