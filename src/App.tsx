@@ -945,6 +945,28 @@ export default function App() {
     setAnchors(trace.anchors);
   }
 
+  async function downloadAuthenticatedPdf(path: string, filename: string) {
+    try {
+      const response = await fetch(path, { headers: await authHeaders() });
+      if (!response.ok) throw new Error("No se pudo descargar el reporte.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo descargar el reporte."));
+    }
+  }
+
+  async function downloadFundReport() {
+    await downloadAuthenticatedPdf("/api/reports/community-fund.pdf", "reporte-fondo-comunitario.pdf");
+  }
+
   async function downloadProductQr(product: Product, orderId?: string) {
     const response = await fetch(`/api/products/${product.id}/qr.png`);
     if (!response.ok) {
@@ -1521,6 +1543,7 @@ export default function App() {
               canManage={Boolean(profile && ["admin", "cooperative", "inventory_manager"].includes(profile.role))}
               onExpense={addFundExpense}
               onConfirmExpense={confirmFundExpense}
+              onDownloadReport={downloadFundReport}
             />
           )}
 
