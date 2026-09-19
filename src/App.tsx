@@ -697,9 +697,12 @@ export default function App() {
     if (!profile) return [];
     const items: AppNotification[] = [];
     const safeProds = Array.isArray(products) ? products : [];
-    const ownProducts = profile.role === "producer"
-      ? safeProds.filter((product) => product.producerId === profile.id || product.producerName === profile.full_name)
-      : safeProds;
+    const ownProducts =
+      profile.role === "producer"
+        ? safeProds.filter((product) => product.producerId === profile.id || product.producerName === profile.full_name)
+        : ["cooperative", "verifier", "inventory_manager"].includes(profile.role)
+          ? safeProds.filter((product) => product.cooperativeId === profile.cooperative_id)
+          : safeProds;
 
     if (["producer", "cooperative", "inventory_manager", "admin"].includes(profile.role)) {
       ownProducts
