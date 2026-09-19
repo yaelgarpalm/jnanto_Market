@@ -123,7 +123,7 @@ export default function ProducerView({
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_520px] 2xl:grid-cols-[minmax(0,1fr)_580px]">
       <SettlementPanel
         mode="producer"
         period={settlementPeriod}
@@ -132,7 +132,7 @@ export default function ProducerView({
         onReload={onReloadSettlements}
       />
 
-      <form onSubmit={onCreate} className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
+      <form onSubmit={onCreate} className="rounded-2xl border border-[#E6E2DA] bg-white p-6 shadow-xs">
         <div className="mb-4 flex gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FAF8F5] text-[#5A6A42] border border-[#E6E2DA]/50">
             <Plus className="h-5 w-5" />
@@ -149,7 +149,7 @@ export default function ProducerView({
           </p>
         )}
 
-        <div className="grid gap-3 md:grid-cols-2 text-xs">
+        <div className="grid gap-4 md:grid-cols-2 text-[11px]">
           <label className="block text-[#6B665F] font-bold uppercase tracking-wider">
             Nombre del Producto
             <input
