@@ -75,6 +75,126 @@ function money(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+type ReportMetric = { label: string; value: string };
+
+const REPORT_DARK = [45, 45, 42] as const;
+const REPORT_GREEN = [90, 106, 66] as const;
+const REPORT_MUTED = [107, 102, 95] as const;
+const REPORT_LIGHT = [250, 248, 245] as const;
+const REPORT_BORDER = [230, 226, 218] as const;
+
+function reportMoney(value: unknown): string {
+  return money(value).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
+}
+
+function reportDate(value: unknown): string {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function drawStandardHeader(
+  doc: jsPDF,
+  title: string,
+  subtitle: string,
+  subject: string,
+  period = "Histórico",
+): number {
+  const pageW = 210;
+  doc.setFillColor(...REPORT_DARK);
+  doc.rect(0, 0, pageW, 31, "F");
+  doc.setFillColor(...REPORT_GREEN);
+  doc.rect(0, 31, pageW, 2, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(17);
+  doc.text("JNATJO MARKET", 14, 13);
+  doc.setFontSize(9);
+  doc.text(subtitle, 14, 22);
+  doc.setFontSize(8);
+  doc.text(new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" }), pageW - 14, 13, { align: "right" });
+
+  let y = 43;
+  doc.setTextColor(...REPORT_DARK);
+  doc.setFontSize(15);
+  doc.text(title, 14, y);
+  y += 7;
+  doc.setFontSize(9);
+  doc.setTextColor(...REPORT_MUTED);
+  const subjectLines = doc.splitTextToSize(subject, pageW - 28);
+  doc.text(subjectLines, 14, y);
+  y += subjectLines.length * 4.5 + 3;
+  doc.setFillColor(...REPORT_LIGHT);
+  doc.setDrawColor(...REPORT_BORDER);
+  doc.roundedRect(14, y, pageW - 28, 10, 2, 2, "FD");
+  doc.setFontSize(7.5);
+  doc.setTextColor(...REPORT_MUTED);
+  doc.text("PERIODO", 18, y + 4);
+  doc.setTextColor(...REPORT_DARK);
+  doc.setFontSize(8.5);
+  doc.text(period, 18, y + 8);
+  return y + 16;
+}
+
+function drawStandardMetrics(doc: jsPDF, metrics: ReportMetric[], y: number): number {
+  const pageW = 210;
+  const gap = 3;
+  const cols = Math.min(metrics.length, 4);
+  const boxW = (pageW - 28 - gap * (cols - 1)) / cols;
+  metrics.forEach((metric, index) => {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    const bx = 14 + col * (boxW + gap);
+    const by = y + row * 27;
+    doc.setFillColor(...REPORT_LIGHT);
+    doc.setDrawColor(...REPORT_BORDER);
+    doc.roundedRect(bx, by, boxW, 22, 2, 2, "FD");
+    doc.setFontSize(6.5);
+    doc.setTextColor(...REPORT_MUTED);
+    doc.text(metric.label, bx + 3, by + 7);
+    doc.setFontSize(11);
+    doc.setTextColor(...REPORT_DARK);
+    doc.text(metric.value, bx + 3, by + 17);
+  });
+  return y + Math.ceil(metrics.length / cols) * 27;
+}
+
+function drawStandardSection(doc: jsPDF, title: string, y: number): number {
+  if (y > 262) {
+    doc.addPage();
+    y = 20;
+  }
+  doc.setFontSize(10);
+  doc.setTextColor(...REPORT_DARK);
+  doc.text(title, 14, y);
+  y += 4;
+  doc.setFillColor(...REPORT_GREEN);
+  doc.rect(14, y, 182, 0.7, "F");
+  return y + 7;
+}
+
+function drawStandardTableHeader(doc: jsPDF, headers: string[], columns: number[], y: number): number {
+  doc.setFillColor(...REPORT_LIGHT);
+  doc.rect(14, y - 5, 182, 7, "F");
+  doc.setFontSize(7);
+  doc.setTextColor(...REPORT_MUTED);
+  headers.forEach((header, index) => doc.text(header, columns[index], y));
+  return y + 6;
+}
+
+function drawStandardFooter(doc: jsPDF) {
+  const pages = doc.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) {
+    doc.setPage(page);
+    const pageH = doc.internal.pageSize.getHeight();
+    doc.setDrawColor(...REPORT_BORDER);
+    doc.line(14, pageH - 15, 196, pageH - 15);
+    doc.setFontSize(7);
+    doc.setTextColor(...REPORT_MUTED);
+    doc.text("Jnatjo Market · Comercio Justo y Trazabilidad Artesanal", 14, pageH - 9);
+    doc.text("Página " + page + " de " + pages, 196, pageH - 9, { align: "right" });
+  }
+}
+
 function assertString(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
