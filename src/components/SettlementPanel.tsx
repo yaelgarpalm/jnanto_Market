@@ -84,7 +84,7 @@ export default function SettlementPanel({
         <>
           <div className="grid gap-2 sm:grid-cols-4">
             <div className="rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3"><p className="text-[9px] font-bold uppercase text-[#8A847C]">Ventas</p><p className="mt-1 text-lg font-black text-[#2D2D2A]">{money(producerSummary.gross_sales)}</p></div>
-            <div className="rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3"><p className="text-[9px] font-bold uppercase text-[#8A847C]">Por liquidar</p><p className="mt-1 text-lg font-black text-[#A44A3F]">{money(producerSummary.eligible_amount)}</p></div>
+            <div className="rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3"><p className="text-[9px] font-bold uppercase text-[#8A847C]">Por liquidar</p><p className="mt-1 text-lg font-black text-[#A44A3F]">{money(producerSummary.pending_amount)}</p></div>
             <div className="rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3"><p className="text-[9px] font-bold uppercase text-[#8A847C]">Pagado</p><p className="mt-1 text-lg font-black text-[#5A6A42]">{money(producerSummary.paid_amount)}</p></div>
             <div className="rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3"><p className="text-[9px] font-bold uppercase text-[#8A847C]">Ventas incluidas</p><p className="mt-1 text-lg font-black text-[#2D2D2A]">{producerSummary.sale_count}</p></div>
           </div>
