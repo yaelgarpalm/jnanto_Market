@@ -1,5 +1,6 @@
 import React, { FormEvent, useState } from "react";
 import { AlertTriangle, Boxes, CalendarClock } from "lucide-react";
+import ReportCard from "../components/ReportCard";
 import { CommunityResource, ResourceReservation, Profile } from "../types";
 
 interface InventoryViewProps {
@@ -14,6 +15,7 @@ interface InventoryViewProps {
   onReserve: (event: FormEvent) => void;
   onCreateResource: (event: FormEvent) => void;
   onRegisterMovement: (resourceId: string, type: "in" | "out", quantity: number, notes: string) => void;
+  onDownloadReport: () => void;
 }
 
 export default function InventoryView({
@@ -28,6 +30,7 @@ export default function InventoryView({
   onReserve,
   onCreateResource,
   onRegisterMovement,
+  onDownloadReport,
 }: InventoryViewProps) {
   const [selectedResourceId, setSelectedResourceId] = useState<string | null>(null);
   const [adjustmentForm, setAdjustmentForm] = useState({
@@ -41,6 +44,12 @@ export default function InventoryView({
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
       <div className="space-y-5">
+        <ReportCard
+          title="Reporte de inventario comunitario"
+          description="PDF estandarizado con existencias actuales, alertas de stock y movimientos recientes según tu ámbito."
+          buttonLabel="Generar y descargar PDF"
+          onDownload={onDownloadReport}
+        />
         <Panel title="Inventario comunitario">
           <div className="grid gap-3 md:grid-cols-2">
             {resources.map((resource) => (
