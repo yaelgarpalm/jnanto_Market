@@ -1265,17 +1265,17 @@ app.get("/api/traceability/verify/:id", async (req, res, next) => {
   }
 });
 
-app.post("/api/blockchain/anchor/:productId", requireAuth, requireRoles(["admin", "cooperative", "verifier"]), async (req: AuthedRequest, res, next) => {
+app.post("/api/blockchain/anchor/:productId", requireAuth, requireRoles(["admin", "producer", "cooperative"]), async (req: AuthedRequest, res, next) => {
   try {
     const { data: product, error: productError } = await supabase
       .from("products")
-      .select("id, cooperative_id")
+      .select("id, cooperative_id, producer_id, owner_id")
       .eq("id", req.params.productId)
       .maybeSingle();
     if (productError) throw productError;
     if (!product) return res.status(404).json({ error: "Producto no encontrado." });
-    if (!canAccessCooperative(req, product.cooperative_id)) {
-      return res.status(403).json({ error: "No puedes anclar productos de otra cooperativa." });
+    if (!canManageProduct(req, product)) {
+      return res.status(403).json({ error: "No puedes anclar el historial de este producto." });
     }
 
     const { data: stages, error } = await supabase

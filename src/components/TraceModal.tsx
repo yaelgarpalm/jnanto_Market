@@ -10,6 +10,7 @@ interface TraceModalProps {
   onClose: () => void;
   onNfc: () => void;
   onAnchor: () => void;
+  canManageTraceability: boolean;
 }
 
 export default function TraceModal({
@@ -20,6 +21,7 @@ export default function TraceModal({
   onClose,
   onNfc,
   onAnchor,
+  canManageTraceability,
 }: TraceModalProps) {
   const producerPay = product.breakdown.materialsCost + product.breakdown.laborCost;
   const gallery = product.images?.length ? product.images : product.image ? [product.image] : [];
@@ -156,21 +158,25 @@ export default function TraceModal({
                 <p className="mt-2 text-[10px] text-[#6B665F] font-serif italic">Escanea con tu celular para auditar el origen</p>
               </div>
 
-              <button
-                onClick={onNfc}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2D2D2A] hover:bg-[#C2845D] py-2 text-xs font-bold text-white transition-all cursor-pointer shadow-xs"
-              >
-                <Fingerprint className="h-4 w-4" />
-                Escribir Etiqueta NFC
-              </button>
+              {canManageTraceability && (
+                <>
+                  <button
+                    onClick={onNfc}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2D2D2A] hover:bg-[#C2845D] py-2 text-xs font-bold text-white transition-all cursor-pointer shadow-xs"
+                  >
+                    <Fingerprint className="h-4 w-4" />
+                    Escribir Etiqueta NFC
+                  </button>
 
-              <button
-                onClick={onAnchor}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5A6A42] hover:bg-[#2D2D2A] py-2 text-xs font-bold text-white transition-all cursor-pointer shadow-xs"
-              >
-                <Lock className="h-4 w-4" />
-                Anclar Historial Blockchain
-              </button>
+                  <button
+                    onClick={onAnchor}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#5A6A42] hover:bg-[#2D2D2A] py-2 text-xs font-bold text-white transition-all cursor-pointer shadow-xs"
+                  >
+                    <Lock className="h-4 w-4" />
+                    Anclar Historial Blockchain
+                  </button>
+                </>
+              )}
 
               <div className="rounded-xl border border-[#E6E2DA] p-3 text-[10px] space-y-1.5 max-h-36 overflow-y-auto bg-[#FAF8F5]">
                 <p className="font-serif font-bold text-[#2D2D2A] border-b border-[#E6E2DA] pb-1">Ledger Blockchain</p>
