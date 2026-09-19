@@ -189,3 +189,41 @@ export interface CommunityFundMovement {
   approved_at?: string | null;
   created_at: string;
 }
+
+export interface ProducerSettlement {
+  id: string;
+  producer_id: string;
+  cooperative_id: string;
+  period_start: string;
+  period_end: string;
+  amount: number;
+  status: "pending" | "paid" | "cancelled";
+  payment_method?: string | null;
+  payment_reference?: string | null;
+  evidence_url?: string | null;
+  notes?: string | null;
+  created_at: string;
+  paid_at?: string | null;
+  item_count?: number;
+}
+
+export interface ProducerSettlementSummary {
+  period_start: string;
+  period_end: string;
+  gross_sales: number;
+  eligible_amount: number;
+  pending_amount: number;
+  paid_amount: number;
+  sale_count: number;
+  eligible_item_count: number;
+  settlements: ProducerSettlement[];
+}
+
+export interface CooperativeSettlementProducerSummary {
+  producer_id: string;
+  producer_name: string;
+  eligible_amount: number;
+  sale_count: number;
+  eligible_item_count: number;
+  pending_settlement_amount: number;
+}
