@@ -1578,14 +1578,6 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
       return res.status(403).json({ error: "No puedes gestionar reservas de otra cooperativa." });
     }
 
-    const { data, error } = await supabase
-      .from("resource_reservations")
-      .update({ status, approved_by: req.user!.id })
-      .eq("id", req.params.id)
-      .select("*")
-      .single();
-    if (error) throw error;
-
     if (existing) {
       const qty = money(existing.quantity ?? 1);
       const resourceId = existing.resource_id;
@@ -1635,6 +1627,14 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
         });
       }
     }
+
+    const { data, error } = await supabase
+      .from("resource_reservations")
+      .update({ status, approved_by: req.user!.id })
+      .eq("id", req.params.id)
+      .select("*")
+      .single();
+    if (error) throw error;
 
     res.json(data);
   } catch (error) {
