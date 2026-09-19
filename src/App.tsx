@@ -17,6 +17,9 @@ import {
   TraceabilityStage,
   UserRole,
   MaterialItem,
+  ProducerSettlementSummary,
+  CooperativeSettlementProducerSummary,
+  ProducerSettlement,
 } from "./types";
 
 // Components
@@ -34,6 +37,7 @@ import InventoryView from "./views/InventoryView";
 import FundView from "./views/FundView";
 import AdminView from "./views/AdminView";
 import PublicTracePage from "./views/PublicTracePage";
+import SettlementPanel from "./components/SettlementPanel";
 
 type CoreTab = "marketplace" | "purchases" | "producer" | "cooperative" | "inventory" | "fund" | "admin";
 type Tab = CoreTab | "account" | "cart";
@@ -104,6 +108,18 @@ export default function App() {
   const [purchaseOrders, setPurchaseOrders] = useState<Order[]>([]);
   const [salesOrders, setSalesOrders] = useState<Order[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
+  const todayForSettlement = new Date();
+  const [settlementPeriod, setSettlementPeriod] = useState({
+    from: new Date(todayForSettlement.getFullYear(), todayForSettlement.getMonth(), 1).toISOString().slice(0, 10),
+    to: todayForSettlement.toISOString().slice(0, 10),
+  });
+  const [producerSettlement, setProducerSettlement] = useState<ProducerSettlementSummary | null>(null);
+  const [cooperativeSettlement, setCooperativeSettlement] = useState<{
+    period_start: string;
+    period_end: string;
+    producers: CooperativeSettlementProducerSummary[];
+    settlements: ProducerSettlement[];
+  } | null>(null);
   const [confirmingPayment, setConfirmingPayment] = useState(false);
   const checkoutHandledRef = useRef(false);
 
@@ -305,6 +321,23 @@ export default function App() {
       setOrders(Array.isArray(adminOrderRows) ? adminOrderRows : []);
       setMovements(Array.isArray(movementRows) ? movementRows : []);
       setRewardBalance(rewards && typeof rewards === 'object' ? rewards : { earnedPoints: 0, redeemedPoints: 0, availablePoints: 0, mxnPerPoint: 1, maxCheckoutPercent: 20 });
+
+      if (profileRow.role === "producer") {
+        setProducerSettlement(await api<ProducerSettlementSummary>(`/api/settlements/producer?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+        setCooperativeSettlement(null);
+      } else if (["cooperative", "inventory_manager", "admin"].includes(profileRow.role)) {
+        setCooperativeSettlement(await api<{
+          period_start: string;
+          period_end: string;
+          producers: CooperativeSettlementProducerSummary[];
+          settlements: ProducerSettlement[];
+        }>(`/api/settlements/cooperative?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+        setProducerSettlement(null);
+      } else {
+        setProducerSettlement(null);
+        setCooperativeSettlement(null);
+      }
+
       if (profileRow.role === "admin") {
         const adminProfileRows = await api<Profile[]>("/api/admin/profiles");
         setAdminProfiles(adminProfileRows);
@@ -313,6 +346,56 @@ export default function App() {
       }
     } catch (error) {
       console.warn(error);
+    }
+  }
+
+  async function reloadSettlements() {
+    if (!session || !profile) return;
+    try {
+      if (profile.role === "producer") {
+        setProducerSettlement(await api<ProducerSettlementSummary>(`/api/settlements/producer?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+      } else if (["cooperative", "inventory_manager", "admin"].includes(profile.role)) {
+        setCooperativeSettlement(await api<{
+          period_start: string;
+          period_end: string;
+          producers: CooperativeSettlementProducerSummary[];
+          settlements: ProducerSettlement[];
+        }>(`/api/settlements/cooperative?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+      }
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudieron actualizar las liquidaciones."));
+    }
+  }
+
+  async function createProducerSettlement(producerId: string) {
+    try {
+      await api("/api/settlements", {
+        method: "POST",
+        body: JSON.stringify({
+          producerId,
+          periodStart: settlementPeriod.from,
+          periodEnd: settlementPeriod.to,
+          paymentMethod: "manual",
+        }),
+      });
+      setAuthMessage("Corte de liquidación creado correctamente.");
+      await reloadSettlements();
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo crear el corte de liquidación."));
+    }
+  }
+
+  async function payProducerSettlement(settlementId: string) {
+    const reference = window.prompt("Referencia del pago o comprobante (opcional):") || "";
+    try {
+      await api(`/api/settlements/${settlementId}/pay`, {
+        method: "POST",
+        body: JSON.stringify({ paymentMethod: "manual", paymentReference: reference }),
+      });
+      setAuthMessage("Pago de liquidación registrado.");
+      await reloadSettlements();
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar el pago de la liquidación."));
     }
   }
 
@@ -1301,6 +1384,10 @@ export default function App() {
               onImageUpload={uploadProductImages}
               onDownloadQr={downloadProductQr}
               onDownloadReport={downloadProducerReport}
+              settlementSummary={producerSettlement}
+              settlementPeriod={settlementPeriod}
+              setSettlementPeriod={setSettlementPeriod}
+              onReloadSettlements={reloadSettlements}
             />
           )}
 
@@ -1316,6 +1403,12 @@ export default function App() {
               onTrace={openTrace}
               onDownloadQr={downloadProductQr}
               onDownloadReport={downloadCoopReport}
+              settlementSummary={cooperativeSettlement}
+              settlementPeriod={settlementPeriod}
+              setSettlementPeriod={setSettlementPeriod}
+              onReloadSettlements={reloadSettlements}
+              onCreateSettlement={createProducerSettlement}
+              onPaySettlement={payProducerSettlement}
             />
           )}
 
