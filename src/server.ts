@@ -1902,9 +1902,11 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
         })
       : null;
 
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      customer_email: req.profile!.email,
+    let session: Stripe.Checkout.Session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        customer_email: req.profile!.email,
       line_items: orderItems.map((item) => ({
         quantity: item.quantity,
         price_data: {
@@ -1918,8 +1920,12 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
       discounts: coupon ? [{ coupon: coupon.id }] : undefined,
       metadata: { orderId: order.id },
       success_url: `${returnOrigin}/?checkout=success&order=${order.id}`,
-      cancel_url: `${returnOrigin}/?checkout=cancelled&order=${order.id}`,
-    });
+        cancel_url: `${returnOrigin}/?checkout=cancelled&order=${order.id}`,
+      });
+    } catch (error) {
+      await releaseCheckoutRewardRedemption(order.id, req.user!.id);
+      throw error;
+    }
 
     await supabase.from("orders").update({ stripe_checkout_session_id: session.id }).eq("id", order.id);
     res.json({ orderId: order.id, url: session.url });
