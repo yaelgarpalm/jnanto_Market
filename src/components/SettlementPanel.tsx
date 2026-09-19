@@ -22,6 +22,12 @@ function money(value: number) {
   return Number(value || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
 }
 
+function shiftDate(base: string, days: number) {
+  const date = new Date(base + "T00:00:00");
+  date.setDate(date.getDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 function statusLabel(status: ProducerSettlement["status"]) {
   if (status === "paid") return "Pagada";
   if (status === "cancelled") return "Cancelada";
@@ -61,6 +67,23 @@ export default function SettlementPanel({
         >
           Actualizar
         </button>
+      </div>
+
+      <div className="mb-2 flex flex-wrap gap-1.5">
+        <button type="button" onClick={() => {
+          const today = new Date().toISOString().slice(0, 10);
+          setPeriod({ from: shiftDate(today, -6), to: today });
+        }} className="rounded-full border border-[#E6E2DA] bg-white px-3 py-1 text-[9px] font-bold uppercase text-[#6B665F] hover:bg-[#FAF8F5]">Semana</button>
+        <button type="button" onClick={() => {
+          const today = new Date().toISOString().slice(0, 10);
+          setPeriod({ from: shiftDate(today, -14), to: today });
+        }} className="rounded-full border border-[#E6E2DA] bg-white px-3 py-1 text-[9px] font-bold uppercase text-[#6B665F] hover:bg-[#FAF8F5]">Quincena</button>
+        <button type="button" onClick={() => {
+          const now = new Date();
+          const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+          const to = now.toISOString().slice(0, 10);
+          setPeriod({ from, to });
+        }} className="rounded-full border border-[#E6E2DA] bg-white px-3 py-1 text-[9px] font-bold uppercase text-[#6B665F] hover:bg-[#FAF8F5]">Mes</button>
       </div>
 
       <div className="mb-4 grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
