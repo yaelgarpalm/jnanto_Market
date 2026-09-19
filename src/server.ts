@@ -2687,16 +2687,7 @@ app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res
     const profile = req.profile!;
     let producerId = "";
     if (profile.role === "producer") {
-      const { data: ownProducer, error: ownProducerError } = await supabase
-        .from("producers")
-        .select("id, name, community, cooperative_id")
-        .or(`id.eq.${req.user!.id},user_id.eq.${req.user!.id}`)
-        .maybeSingle();
-      if (ownProducerError) throw ownProducerError;
-      if (!ownProducer) {
-        return res.status(404).json({ error: "No se encontró un registro de productor vinculado a tu cuenta." });
-      }
-      producerId = ownProducer.id;
+      producerId = req.user!.id;
     } else if (profile.role === "admin") {
       producerId = assertString(req.query.producerId);
       if (!producerId) return res.status(400).json({ error: "Selecciona un productor para generar el reporte." });
