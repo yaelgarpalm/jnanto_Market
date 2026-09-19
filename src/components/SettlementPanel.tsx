@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { CircleDollarSign, CheckCircle2, CalendarRange, Banknote } from "lucide-react";
 import { CooperativeSettlementProducerSummary, ProducerSettlement, ProducerSettlementSummary } from "../types";
 
@@ -15,7 +15,7 @@ interface SettlementPanelProps {
   } | null;
   onReload: () => void;
   onCreateSettlement?: (producerId: string) => void;
-  onPaySettlement?: (settlementId: string) => void;
+  onPaySettlement?: (settlementId: string, paymentMethod: SettlementPaymentMethod, paymentReference: string, notes: string) => Promise<void> | void;
 }
 
 function money(value: number) {
@@ -27,6 +27,15 @@ function shiftDate(base: string, days: number) {
   date.setDate(date.getDate() + days);
   return date.toISOString().slice(0, 10);
 }
+
+type SettlementPaymentMethod = "transferencia" | "efectivo" | "deposito" | "otro";
+
+const settlementPaymentMethodLabels: Record<SettlementPaymentMethod, string> = {
+  transferencia: "Transferencia bancaria",
+  efectivo: "Efectivo",
+  deposito: "Depósito bancario",
+  otro: "Otro",
+};
 
 function statusLabel(status: ProducerSettlement["status"]) {
   if (status === "paid") return "Pagada";
@@ -44,6 +53,48 @@ export default function SettlementPanel({
   onCreateSettlement,
   onPaySettlement,
 }: SettlementPanelProps) {
+  const [paymentSettlement, setPaymentSettlement] = useState<ProducerSettlement | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<SettlementPaymentMethod>("transferencia");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [paymentNotes, setPaymentNotes] = useState("");
+  const [paymentError, setPaymentError] = useState("");
+  const [savingPayment, setSavingPayment] = useState(false);
+
+  function openPaymentDialog(settlement: ProducerSettlement) {
+    setPaymentSettlement(settlement);
+    setPaymentMethod("transferencia");
+    setPaymentReference("");
+    setPaymentNotes("");
+    setPaymentError("");
+  }
+
+  function closePaymentDialog() {
+    if (savingPayment) return;
+    setPaymentSettlement(null);
+    setPaymentError("");
+  }
+
+  async function submitPayment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!paymentSettlement || !onPaySettlement) return;
+    const reference = paymentReference.trim();
+    if (!reference) {
+      setPaymentError("La referencia, folio o comprobante es obligatoria para registrar el pago.");
+      return;
+    }
+
+    setSavingPayment(true);
+    setPaymentError("");
+    try {
+      await onPaySettlement(paymentSettlement.id, paymentMethod, reference, paymentNotes.trim());
+      setPaymentSettlement(null);
+    } catch (error) {
+      setPaymentError(error instanceof Error ? error.message : "No se pudo registrar el pago.");
+    } finally {
+      setSavingPayment(false);
+    }
+  }
+
   return (
     <section className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -162,7 +213,7 @@ export default function SettlementPanel({
                   <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E6E2DA] bg-[#FAF8F5] p-3">
                     <div><p className="text-xs font-bold text-[#2D2D2A]">{item.period_start} → {item.period_end}</p><p className="text-[10px] text-[#6B665F]">{statusLabel(item.status)}</p></div>
                     <div className="flex items-center gap-2"><span className="font-mono text-sm font-bold text-[#5A6A42]">{money(item.amount)}</span>
-                      {item.status === "pending" && <button type="button" onClick={() => onPaySettlement?.(item.id)}
+                      {item.status === "pending" && <button type="button" onClick={() => openPaymentDialog(item)}
                         className="inline-flex items-center gap-1 rounded-lg bg-[#2D2D2A] px-3 py-2 text-[10px] font-bold uppercase text-white hover:bg-[#5A6A42]">
                         <CheckCircle2 className="h-3 w-3" />Registrar pago
                       </button>}
@@ -174,6 +225,71 @@ export default function SettlementPanel({
           </div>
         </div>
       )}
+      {paymentSettlement && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="settlement-payment-title">
+          <form onSubmit={submitPayment} className="w-full max-w-lg rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 id="settlement-payment-title" className="font-serif text-base font-bold text-[#2D2D2A]">Registrar pago de liquidación</h3>
+                <p className="mt-1 text-[11px] text-[#6B665F]">
+                  {paymentSettlement.period_start} → {paymentSettlement.period_end} · {money(paymentSettlement.amount)}
+                </p>
+              </div>
+              <button type="button" onClick={closePaymentDialog} disabled={savingPayment} className="rounded-lg border border-[#E6E2DA] px-2.5 py-1 text-xs font-bold text-[#6B665F] hover:bg-[#FAF8F5] disabled:opacity-40">Cerrar</button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-[#6B665F]">
+                Forma de pago
+                <select
+                  value={paymentMethod}
+                  onChange={(event) => setPaymentMethod(event.target.value as SettlementPaymentMethod)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#E6E2DA] bg-[#FAF8F5] px-3 text-xs text-[#2D2D2A] outline-none focus:border-[#C2845D]"
+                  required
+                >
+                  {Object.entries(settlementPaymentMethodLabels).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-[10px] font-bold uppercase tracking-wider text-[#6B665F]">
+                Referencia / folio / comprobante
+                <input
+                  value={paymentReference}
+                  onChange={(event) => setPaymentReference(event.target.value)}
+                  className="mt-1 h-10 w-full rounded-lg border border-[#E6E2DA] bg-[#FAF8F5] px-3 text-xs text-[#2D2D2A] outline-none focus:border-[#C2845D]"
+                  placeholder="Ej. TRANSF-56666"
+                  required
+                />
+              </label>
+
+              <label className="text-[10px] font-bold uppercase tracking-wider text-[#6B665F] sm:col-span-2">
+                Notas del pago (opcional)
+                <textarea
+                  value={paymentNotes}
+                  onChange={(event) => setPaymentNotes(event.target.value)}
+                  rows={3}
+                  className="mt-1 w-full rounded-lg border border-[#E6E2DA] bg-[#FAF8F5] p-3 text-xs text-[#2D2D2A] outline-none focus:border-[#C2845D]"
+                  placeholder="Observaciones, folio interno o datos adicionales."
+                />
+              </label>
+            </div>
+
+            {paymentError && (
+              <p className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] font-semibold text-[#A44A3F]">{paymentError}</p>
+            )}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={closePaymentDialog} disabled={savingPayment} className="rounded-lg border border-[#E6E2DA] bg-white px-4 py-2 text-[10px] font-bold uppercase text-[#6B665F] hover:bg-[#FAF8F5] disabled:opacity-40">Cancelar</button>
+              <button type="submit" disabled={savingPayment || !paymentReference.trim()} className="rounded-lg bg-[#2D2D2A] px-4 py-2 text-[10px] font-bold uppercase text-white hover:bg-[#5A6A42] disabled:cursor-not-allowed disabled:opacity-40">
+                {savingPayment ? "Registrando..." : "Confirmar pago"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
     </section>
   );
 }
