@@ -1005,6 +1005,10 @@ export default function App() {
   }
 
   async function anchorProduct(productId: string) {
+    if (!profile || !["producer", "cooperative", "admin"].includes(profile.role)) {
+      setAuthMessage("Solo productores, cooperativas y administradores pueden anclar el historial blockchain.");
+      return;
+    }
     const anchor = await api<BlockchainAnchor>(`/api/blockchain/anchor/${productId}`, {
       method: "POST",
       body: JSON.stringify({}),
@@ -1014,6 +1018,10 @@ export default function App() {
   }
 
   async function writeNfc(product: Product) {
+    if (!profile || !["producer", "cooperative", "admin"].includes(profile.role)) {
+      setAuthMessage("Solo productores, cooperativas y administradores pueden escribir etiquetas NFC.");
+      return;
+    }
     const url = `${window.location.origin}/trazabilidad/${encodeURIComponent(product.traceCode)}`;
     const NDEFReader = (window as any).NDEFReader;
     if (!NDEFReader) {
@@ -1365,6 +1373,7 @@ export default function App() {
           onClose={() => setSelectedProduct(null)}
           onNfc={() => writeNfc(selectedProduct)}
           onAnchor={() => anchorProduct(selectedProduct.id)}
+          canManageTraceability={Boolean(profile && ["producer", "cooperative", "admin"].includes(profile.role))}
         />
       )}
     </div>
