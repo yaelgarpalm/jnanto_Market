@@ -8,9 +8,10 @@ interface FundViewProps {
   canManage: boolean;
   onExpense: (event: FormEvent<HTMLFormElement>) => void;
   onConfirmExpense: (movementId: string) => void;
+  onDownloadReport: () => void;
 }
 
-export default function FundView({ balance, movements, canManage, onExpense, onConfirmExpense }: FundViewProps) {
+export default function FundView({ balance, movements, canManage, onExpense, onConfirmExpense, onDownloadReport }: FundViewProps) {
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
       <div className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
@@ -21,15 +22,14 @@ export default function FundView({ balance, movements, canManage, onExpense, onC
             <p className="text-[10px] uppercase tracking-widest text-[#CFCAC2] font-mono">Fondo Comunal Acumulado</p>
             <p className="text-3xl font-black mt-1 font-sans">${balance.toLocaleString("es-MX")} MXN</p>
           </div>
-          <a
-            href="/api/reports/community-fund.pdf"
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={onDownloadReport}
             className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2 text-xs font-bold text-[#2D2D2A] hover:bg-[#FAF8F5] transition-all"
           >
             <FileText className="h-4 w-4" />
             Descargar Reporte PDF
-          </a>
+          </button>
         </div>
 
         <div className="space-y-2 max-h-96 overflow-y-auto pr-1">

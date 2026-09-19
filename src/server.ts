@@ -487,6 +487,21 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
 
     const event = stripe.webhooks.constructEvent(req.body, signature, STRIPE_WEBHOOK_SECRET);
 
+    if (event.type === "checkout.session.expired" || event.type === "checkout.session.async_payment_failed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const orderId = session.metadata?.orderId;
+      if (orderId) {
+        const { data: order } = await supabase
+          .from("orders")
+          .select("id, customer_id, status")
+          .eq("id", orderId)
+          .maybeSingle();
+        if (order && order.status === "pending") {
+          await releaseCheckoutRewardRedemption(orderId, order.customer_id || undefined);
+        }
+      }
+    }
+
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
       const orderId = session.metadata?.orderId;
@@ -702,7 +717,10 @@ app.post("/api/auth/profile", requireUser, async (req: AuthedRequest, res, next)
 
 app.get("/api/cooperatives", async (_req, res, next) => {
   try {
-    const { data, error } = await supabase.from("cooperatives").select("*").order("name");
+    const { data, error } = await supabase
+      .from("cooperatives")
+      .select("id, name, municipality, community, representative")
+      .order("name");
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -712,7 +730,10 @@ app.get("/api/cooperatives", async (_req, res, next) => {
 
 app.get("/api/producers", async (_req, res, next) => {
   try {
-    const { data, error } = await supabase.from("producers").select("*").order("name");
+    const { data, error } = await supabase
+      .from("producers")
+      .select("id, name, community, cooperative_id, description, verified, avatar")
+      .order("name");
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -723,7 +744,13 @@ app.get("/api/producers", async (_req, res, next) => {
 app.get("/api/products", async (req, res, next) => {
   try {
     let query = supabase.from("products").select("*, product_images(*)").order("created_at", { ascending: false });
-    if (req.query.includePending !== "true") query = query.eq("status", "verified");
+    let allowPending = false;
+    if (req.query.includePending === "true") {
+      const user = await getUserFromRequest(req);
+      const privateProfile = user ? await getProfile(user.id) : null;
+      allowPending = Boolean(privateProfile && ["cooperative", "verifier", "inventory_manager", "admin"].includes(privateProfile.role));
+    }
+    if (!allowPending) query = query.eq("status", "verified");
     query = query.neq("status", "archived");
     if (req.query.category && req.query.category !== "Todos") query = query.eq("category", String(req.query.category));
     const { data, error } = await query;
@@ -768,6 +795,18 @@ app.post("/api/products", requireAuth, requireRoles(["producer", "cooperative", 
     if (!cooperative) return res.status(404).json({ error: "Cooperativa no encontrada." });
 
     const price = money(req.body.price);
+    const requestedStock = Number(req.body.stock ?? 1);
+    const requestedCraftHours = Number(req.body.craftHours ?? 0);
+    const requestedCommunityFund = Number(req.body.communityFund ?? 0);
+    const requestedPlatformCommission = Number(req.body.platformCommission ?? 0);
+    const requestedMaterialsCost = Number(req.body.materialsCost ?? 0);
+    if (!Number.isFinite(price) || price <= 0) return res.status(400).json({ error: "El precio debe ser mayor que cero." });
+    if (!Number.isFinite(requestedStock) || requestedStock < 0) return res.status(400).json({ error: "Las existencias no pueden ser negativas." });
+    if (!Number.isFinite(requestedCraftHours) || requestedCraftHours <= 0) return res.status(400).json({ error: "Las horas de trabajo deben ser mayores que cero." });
+    if (!Number.isFinite(requestedCommunityFund) || requestedCommunityFund < 0) return res.status(400).json({ error: "La aportación al fondo no puede ser negativa." });
+    if (!Number.isFinite(requestedPlatformCommission) || requestedPlatformCommission < 0) return res.status(400).json({ error: "La comisión de plataforma no puede ser negativa." });
+    if (!Number.isFinite(requestedMaterialsCost) || requestedMaterialsCost < 0) return res.status(400).json({ error: "El costo de materiales no puede ser negativo." });
+
     const materialItems = (Array.isArray(req.body.materialItems) ? req.body.materialItems : [])
       .map((item: any) => ({
         name: assertString(item.name),
@@ -806,14 +845,14 @@ app.post("/api/products", requireAuth, requireRoles(["producer", "cooperative", 
       category: assertString(req.body.category, "Textiles bordados"),
       price,
       materials,
-      craft_hours: money(req.body.craftHours),
+      craft_hours: requestedCraftHours,
       producer_id: producerId || producer?.id || "prod-1",
       producer_name: producer?.name || req.profile!.full_name,
       community: producer?.community || req.profile!.community || "San Felipe del Progreso",
       cooperative_id: cooperativeId,
       cooperative_name: cooperative?.name || "Cooperativa local",
       image: primaryImage,
-      stock: Number(req.body.stock || 1),
+      stock: requestedStock,
       status: req.profile!.role === "producer" ? "pending" : "verified",
       trace_code: traceCode,
       qr_payload: url,
@@ -1168,6 +1207,9 @@ app.post("/api/products/:id/confirm-receipt", requireAuth, async (req: AuthedReq
     if (!order) {
       return res.status(403).json({ error: "Solo el cliente que compró esta pieza puede confirmar recibido y reclamar recompensa." });
     }
+    if (!["shipped", "delivered"].includes(order.fulfillment_status)) {
+      return res.status(409).json({ error: "La recepción solo puede confirmarse después de que la orden haya sido enviada." });
+    }
 
     const { data: existing, error: existingError } = await supabase
       .from("traceability_stages")
@@ -1323,9 +1365,24 @@ app.post("/api/blockchain/anchor/:productId", requireAuth, requireRoles(["admin"
   }
 });
 
-app.get("/api/resources", async (_req, res, next) => {
+app.get("/api/resources", async (req, res, next) => {
   try {
-    const { data, error } = await supabase.from("shared_resources").select("*").order("name");
+    const user = await getUserFromRequest(req);
+    const privateProfile = user ? await getProfile(user.id) : null;
+    let query = supabase
+      .from("shared_resources")
+      .select("id, name, type, description, quantity, unit, cooperative_id, rental_cost, status, available_shared, low_stock_threshold")
+      .order("name");
+
+    if (privateProfile?.role === "admin") {
+      // Full operational view for administrators.
+    } else if (privateProfile && ["cooperative", "inventory_manager", "logistics", "verifier"].includes(privateProfile.role)) {
+      query = query.eq("cooperative_id", privateProfile.cooperative_id || "__none__");
+    } else {
+      query = query.eq("available_shared", true).eq("status", "available");
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -1374,9 +1431,12 @@ app.post("/api/resources", requireAuth, requireRoles(["producer", "cooperative",
 
 app.post("/api/resources/:id/movement", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
-    const quantity = money(req.body.quantity); // Positive amount
+    const quantity = money(req.body.quantity);
     const type = req.body.type === "out" ? "out" : "in";
     const notes = assertString(req.body.notes);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return res.status(400).json({ error: "La cantidad del movimiento debe ser mayor que cero." });
+    }
 
     const { data: resource } = await supabase.from("shared_resources").select("*").eq("id", req.params.id).maybeSingle();
     if (!resource) return res.status(404).json({ error: "Recurso no encontrado." });
@@ -1385,9 +1445,20 @@ app.post("/api/resources/:id/movement", requireAuth, requireRoles(["cooperative"
     }
 
     const currentQty = Number(resource.quantity || 0);
-    const newQuantity = Math.max(type === "in" ? currentQty + quantity : currentQty - quantity, 0);
+    if (type === "out" && quantity > currentQty) {
+      return res.status(409).json({ error: "No puedes retirar más unidades de las disponibles." });
+    }
+    const newQuantity = type === "in" ? currentQty + quantity : currentQty - quantity;
 
-    await supabase.from("shared_resources").update({ quantity: newQuantity }).eq("id", req.params.id);
+    const { data: updatedResource, error: updateError } = await supabase
+      .from("shared_resources")
+      .update({ quantity: newQuantity })
+      .eq("id", req.params.id)
+      .eq("quantity", currentQty)
+      .select("*")
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (!updatedResource) return res.status(409).json({ error: "El inventario cambió mientras se registraba el movimiento. Intenta de nuevo." });
 
     const movement = {
       resource_id: req.params.id,
@@ -1495,7 +1566,7 @@ app.post("/api/resources/reservations", requireAuth, async (req: AuthedRequest, 
 
 app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
   try {
-    const status = ["approved", "completed", "cancelled"].includes(req.body.status) ? req.body.status : "pending";
+    const requestedStatus = ["approved", "completed", "cancelled"].includes(req.body.status) ? req.body.status : "pending";
 
     const { data: existing } = await supabase
       .from("resource_reservations")
@@ -1503,6 +1574,14 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
       .eq("id", req.params.id)
       .maybeSingle();
     if (!existing) return res.status(404).json({ error: "Reservación no encontrada." });
+    const status = requestedStatus;
+    const allowedTransition =
+      existing.status === status ||
+      (existing.status === "pending" && ["approved", "cancelled"].includes(status)) ||
+      (existing.status === "approved" && ["completed", "cancelled"].includes(status));
+    if (!allowedTransition) {
+      return res.status(409).json({ error: `No se puede cambiar una reservación de ${existing.status} a ${status}.` });
+    }
 
     const { data: existingResource } = await supabase
       .from("shared_resources")
@@ -1513,14 +1592,6 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
     if (!canAccessCooperative(req, existingResource.cooperative_id)) {
       return res.status(403).json({ error: "No puedes gestionar reservas de otra cooperativa." });
     }
-
-    const { data, error } = await supabase
-      .from("resource_reservations")
-      .update({ status, approved_by: req.user!.id })
-      .eq("id", req.params.id)
-      .select("*")
-      .single();
-    if (error) throw error;
 
     if (existing) {
       const qty = money(existing.quantity ?? 1);
@@ -1533,8 +1604,20 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
           .select("quantity")
           .eq("id", resourceId)
           .maybeSingle();
-        const newQty = Math.max(money(resource?.quantity) - qty, 0);
-        await supabase.from("shared_resources").update({ quantity: newQty }).eq("id", resourceId);
+        const currentQty = money(resource?.quantity);
+        if (qty > currentQty) {
+          return res.status(409).json({ error: "No hay inventario suficiente para aprobar esta reservación." });
+        }
+        const newQty = currentQty - qty;
+        const { data: updatedResource, error: updateError } = await supabase
+          .from("shared_resources")
+          .update({ quantity: newQty })
+          .eq("id", resourceId)
+          .eq("quantity", currentQty)
+          .select("id")
+          .maybeSingle();
+        if (updateError) throw updateError;
+        if (!updatedResource) return res.status(409).json({ error: "El inventario cambió mientras se aprobaba la reservación." });
         await supabase.from("inventory_movements").insert({
           resource_id: resourceId,
           type: "loan",
@@ -1560,18 +1643,46 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
       }
     }
 
+    const { data, error } = await supabase
+      .from("resource_reservations")
+      .update({ status, approved_by: req.user!.id })
+      .eq("id", req.params.id)
+      .select("*")
+      .single();
+    if (error) throw error;
+
     res.json(data);
   } catch (error) {
     next(error);
   }
 });
 
-app.get("/api/community-fund", async (_req, res, next) => {
+app.get("/api/community-fund", async (req, res, next) => {
   try {
-    const { data, error } = await supabase
+    const user = await getUserFromRequest(req);
+    const privateProfile = user ? await getProfile(user.id) : null;
+    let query = supabase
       .from("community_fund_movements")
-      .select("*")
+      .select("id, type, amount, description, responsible, evidence_url, order_id, cooperative_id, approval_status, approved_by, approved_at, created_at")
       .order("created_at", { ascending: false });
+
+    if (privateProfile?.role === "admin") {
+      // Global operational view.
+    } else if (privateProfile && ["cooperative", "inventory_manager", "verifier", "logistics"].includes(privateProfile.role)) {
+      query = query.eq("cooperative_id", privateProfile.cooperative_id || "__none__");
+    } else {
+      // Public/customer view: expose only an aggregate balance, never movement details.
+      const { data: incomes, error: incomeError } = await supabase
+        .from("community_fund_movements")
+        .select("type, amount, approval_status")
+        .eq("approval_status", "confirmed");
+      if (incomeError) throw incomeError;
+      const publicBalance = (incomes || []).reduce((sum, item) =>
+        item.type === "income" ? sum + money(item.amount) : sum - money(item.amount), 0);
+      return res.json({ balance: publicBalance, movements: [] });
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     const balance = (data || []).reduce((sum, item) => {
       if (item.type === "income") return sum + money(item.amount);
@@ -1646,6 +1757,40 @@ app.post("/api/community-fund/movements/:id/confirm", requireAuth, requireRoles(
       .single();
     if (error) throw error;
     res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function releaseCheckoutRewardRedemption(orderId: string, userId?: string) {
+  const query = supabase
+    .from("customer_reward_redemptions")
+    .delete()
+    .eq("order_id", orderId);
+  if (userId) query.eq("customer_id", userId);
+  const { error } = await query;
+  if (error && error.code !== "42P01") throw error;
+}
+
+app.post("/api/checkout/cancel", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const orderId = assertString(req.body.orderId);
+    if (!orderId) return res.status(400).json({ error: "Falta el ID de la orden." });
+
+    const { data: order, error } = await supabase
+      .from("orders")
+      .select("id, customer_id, status, stripe_checkout_session_id")
+      .eq("id", orderId)
+      .eq("customer_id", req.user!.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!order) return res.status(404).json({ error: "Orden no encontrada." });
+    if (["paid", "shipped", "delivered"].includes(order.status)) {
+      return res.status(409).json({ error: "Una orden pagada no puede liberar el canje de puntos desde esta ruta." });
+    }
+
+    await releaseCheckoutRewardRedemption(orderId, req.user!.id);
+    res.json({ success: true });
   } catch (error) {
     next(error);
   }
@@ -1757,9 +1902,11 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
         })
       : null;
 
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      customer_email: req.profile!.email,
+    let session: Stripe.Checkout.Session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        customer_email: req.profile!.email,
       line_items: orderItems.map((item) => ({
         quantity: item.quantity,
         price_data: {
@@ -1773,8 +1920,12 @@ app.post("/api/checkout/session", requireAuth, async (req: AuthedRequest, res, n
       discounts: coupon ? [{ coupon: coupon.id }] : undefined,
       metadata: { orderId: order.id },
       success_url: `${returnOrigin}/?checkout=success&order=${order.id}`,
-      cancel_url: `${returnOrigin}/?checkout=cancelled&order=${order.id}`,
-    });
+        cancel_url: `${returnOrigin}/?checkout=cancelled&order=${order.id}`,
+      });
+    } catch (error) {
+      await releaseCheckoutRewardRedemption(order.id, req.user!.id);
+      throw error;
+    }
 
     await supabase.from("orders").update({ stripe_checkout_session_id: session.id }).eq("id", order.id);
     res.json({ orderId: order.id, url: session.url });
@@ -2109,6 +2260,18 @@ app.post("/api/orders/:id/fulfillment", requireAuth, requireRoles(["cooperative"
     }
 
     if (status === "cancelled" && order.status === "paid") {
+      const orderItemIds = (order.order_items || []).map((item: any) => item.id);
+      if (orderItemIds.length > 0) {
+        const { data: settledItems, error: settledItemsError } = await supabase
+          .from("producer_settlement_items")
+          .select("order_item_id, producer_settlements!inner(status)")
+          .in("order_item_id", orderItemIds)
+          .eq("producer_settlements.status", "paid");
+        if (settledItemsError) throw settledItemsError;
+        if ((settledItems || []).length > 0) {
+          return res.status(409).json({ error: "No se puede cancelar una orden cuyo pago al productor ya fue liquidado." });
+        }
+      }
       if (!stripe || !order.stripe_payment_intent_id) {
         return res.status(409).json({ error: "La orden pagada requiere un PaymentIntent de Stripe para procesar el reembolso." });
       }
@@ -2216,9 +2379,265 @@ app.post("/api/sensors", requireAuth, requireRoles(["logistics", "cooperative", 
   }
 });
 
-app.get("/api/reports/community-fund.pdf", async (_req, res, next) => {
+
+function settlementDate(value: unknown, fallback: string): string {
+  const raw = assertString(value, fallback);
+  return /^\\d{4}-\\d{2}-\\d{2}$/.test(raw) ? raw : fallback;
+}
+
+function defaultSettlementPeriod() {
+  const now = new Date();
+  const end = now.toISOString().slice(0, 10);
+  const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  return { start: startDate.toISOString().slice(0, 10), end };
+}
+
+async function getEligibleProducerItems(producerId: string, from: string, to: string) {
+  const { data: producer, error: producerError } = await supabase
+    .from("producers")
+    .select("id, name, cooperative_id")
+    .eq("id", producerId)
+    .maybeSingle();
+  if (producerError) throw producerError;
+  if (!producer) return { producer: null, items: [] };
+
+  const { data: products, error: productError } = await supabase
+    .from("products")
+    .select("id")
+    .eq("producer_id", producerId);
+  if (productError) throw productError;
+  const productIds = (products || []).map((row: any) => row.id);
+  if (productIds.length === 0) return { producer, items: [] };
+
+  const { data: items, error: itemError } = await supabase
+    .from("order_items")
+    .select("id, order_id, product_id, product_name, quantity, producer_pay")
+    .in("product_id", productIds);
+  if (itemError) throw itemError;
+  const orderIds = Array.from(new Set((items || []).map((item: any) => item.order_id)));
+  if (orderIds.length === 0) return { producer, items: [] };
+
+  const { data: orders, error: orderError } = await supabase
+    .from("orders")
+    .select("id, status, created_at, customer_name, customer_email")
+    .in("id", orderIds);
+  if (orderError) throw orderError;
+
+  const orderById = new Map((orders || []).map((order: any) => [order.id, order]));
+  const eligible = (items || []).filter((item: any) => {
+    const order = orderById.get(item.order_id);
+    const date = order?.created_at ? new Date(order.created_at).toISOString().slice(0, 10) : "";
+    return Boolean(order)
+      && ["paid", "shipped", "delivered"].includes(order.status)
+      && date >= from && date <= to;
+  }).map((item: any) => ({ ...item, order: orderById.get(item.order_id) }));
+
+  if (eligible.length === 0) return { producer, items: [] };
+
+  const itemIds = eligible.map((item: any) => item.id);
+  const { data: settledItems, error: settledError } = await supabase
+    .from("producer_settlement_items")
+    .select("order_item_id")
+    .in("order_item_id", itemIds);
+  if (settledError) throw settledError;
+  const settledIds = new Set((settledItems || []).map((item: any) => item.order_item_id));
+
+  return { producer, items: eligible.filter((item: any) => !settledIds.has(item.id)) };
+}
+
+app.get("/api/settlements/producer", requireAuth, requireRoles(["producer"]), async (req: AuthedRequest, res, next) => {
   try {
-    const { data } = await supabase.from("community_fund_movements").select("*").order("created_at", { ascending: false });
+    const defaults = defaultSettlementPeriod();
+    const from = settlementDate(req.query.from, defaults.start);
+    const to = settlementDate(req.query.to, defaults.end);
+    if (from > to) return res.status(400).json({ error: "El periodo de consulta no es válido." });
+
+    const { producer, items } = await getEligibleProducerItems(req.user!.id, from, to);
+    if (!producer) return res.status(404).json({ error: "Productor no encontrado." });
+
+    const { data: settlements, error: settlementError } = await supabase
+      .from("producer_settlements")
+      .select("*")
+      .eq("producer_id", req.user!.id)
+      .gte("period_end", from)
+      .lte("period_start", to)
+      .order("created_at", { ascending: false });
+    if (settlementError) throw settlementError;
+
+    const grossSales = items.reduce((sum: number, item: any) => sum + money(item.unit_price) * money(item.quantity), 0);
+    const eligibleAmount = items.reduce((sum: number, item: any) => sum + money(item.producer_pay), 0);
+    const paidAmount = (settlements || [])
+      .filter((row: any) => row.status === "paid")
+      .reduce((sum: number, row: any) => sum + money(row.amount), 0);
+    const pendingAmount = eligibleAmount;
+
+    return res.json({
+      period_start: from,
+      period_end: to,
+      gross_sales: grossSales,
+      eligible_amount: eligibleAmount,
+      pending_amount: pendingAmount,
+      paid_amount: paidAmount,
+      sale_count: new Set(items.map((item: any) => item.order_id)).size,
+      eligible_item_count: items.length,
+      settlements: settlements || [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/settlements/cooperative", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const defaults = defaultSettlementPeriod();
+    const from = settlementDate(req.query.from, defaults.start);
+    const to = settlementDate(req.query.to, defaults.end);
+    if (from > to) return res.status(400).json({ error: "El periodo de consulta no es válido." });
+
+    const { data: producers, error: producerError } = await supabase
+      .from("producers")
+      .select("id, name, cooperative_id")
+      .order("name");
+    if (producerError) throw producerError;
+
+    const scopedProducers = (producers || []).filter((producer: any) =>
+      req.profile!.role === "admin" || producer.cooperative_id === req.profile!.cooperative_id,
+    );
+
+    const summaries = [];
+    for (const producer of scopedProducers) {
+      const { items } = await getEligibleProducerItems(producer.id, from, to);
+      const eligibleAmount = items.reduce((sum: number, item: any) => sum + money(item.producer_pay), 0);
+      const orderCount = new Set(items.map((item: any) => item.order_id)).size;
+      const { data: pendingSettlements } = await supabase
+        .from("producer_settlements")
+        .select("amount")
+        .eq("producer_id", producer.id)
+        .eq("status", "pending")
+        .gte("period_end", from)
+        .lte("period_start", to);
+      const pendingSettlementAmount = (pendingSettlements || []).reduce((sum: number, row: any) => sum + money(row.amount), 0);
+      summaries.push({
+        producer_id: producer.id,
+        producer_name: producer.name,
+        eligible_amount: eligibleAmount,
+        sale_count: orderCount,
+        eligible_item_count: items.length,
+        pending_settlement_amount: pendingSettlementAmount,
+      });
+    }
+
+    const { data: settlements, error: settlementError } = await supabase
+      .from("producer_settlements")
+      .select("*")
+      .in("cooperative_id", req.profile!.role === "admin"
+        ? scopedProducers.map((producer: any) => producer.cooperative_id)
+        : [req.profile!.cooperative_id])
+      .gte("period_end", from)
+      .lte("period_start", to)
+      .order("created_at", { ascending: false });
+    if (settlementError) throw settlementError;
+
+    res.json({ period_start: from, period_end: to, producers: summaries, settlements: settlements || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settlements", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const producerId = assertString(req.body.producerId);
+    const defaults = defaultSettlementPeriod();
+    const from = settlementDate(req.body.periodStart, defaults.start);
+    const to = settlementDate(req.body.periodEnd, defaults.end);
+    if (!producerId || from > to) return res.status(400).json({ error: "Indica productor y un periodo válido." });
+
+    const { producer, items } = await getEligibleProducerItems(producerId, from, to);
+    if (!producer) return res.status(404).json({ error: "Productor no encontrado." });
+    if (req.profile!.role !== "admin" && producer.cooperative_id !== req.profile!.cooperative_id) {
+      return res.status(403).json({ error: "No puedes liquidar a un productor de otra cooperativa." });
+    }
+    if (items.length === 0) return res.status(409).json({ error: "No hay ventas pendientes de liquidar en el periodo seleccionado." });
+
+    const amount = items.reduce((sum: number, item: any) => sum + money(item.producer_pay), 0);
+    const { data: settlement, error: settlementError } = await supabase
+      .from("producer_settlements")
+      .insert({
+        producer_id: producerId,
+        cooperative_id: producer.cooperative_id,
+        period_start: from,
+        period_end: to,
+        amount,
+        status: "pending",
+        payment_method: assertString(req.body.paymentMethod) || null,
+        notes: assertString(req.body.notes) || null,
+        created_by: req.user!.id,
+      })
+      .select("*")
+      .single();
+    if (settlementError) throw settlementError;
+
+    const { error: itemError } = await supabase.from("producer_settlement_items").insert(
+      items.map((item: any) => ({
+        settlement_id: settlement.id,
+        order_item_id: item.id,
+        amount: money(item.producer_pay),
+      })),
+    );
+    if (itemError) throw itemError;
+
+    res.status(201).json({ ...settlement, item_count: items.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settlements/:id/pay", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const { data: settlement, error } = await supabase
+      .from("producer_settlements")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!settlement) return res.status(404).json({ error: "Liquidación no encontrada." });
+    if (req.profile!.role !== "admin" && settlement.cooperative_id !== req.profile!.cooperative_id) {
+      return res.status(403).json({ error: "No puedes pagar liquidaciones de otra cooperativa." });
+    }
+    if (settlement.status !== "pending") return res.status(409).json({ error: "Solo se pueden pagar liquidaciones pendientes." });
+
+    const { data, error: updateError } = await supabase
+      .from("producer_settlements")
+      .update({
+        status: "paid",
+        payment_method: assertString(req.body.paymentMethod, settlement.payment_method || "manual"),
+        payment_reference: assertString(req.body.paymentReference) || null,
+        evidence_url: assertString(req.body.evidenceUrl) || null,
+        notes: assertString(req.body.notes, settlement.notes || "") || null,
+        paid_by: req.user!.id,
+        paid_at: new Date().toISOString(),
+      })
+      .eq("id", settlement.id)
+      .eq("status", "pending")
+      .select("*")
+      .single();
+    if (updateError) throw updateError;
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    let query = supabase
+      .from("community_fund_movements")
+      .select("id, type, amount, description, responsible, cooperative_id, approval_status, created_at")
+      .order("created_at", { ascending: false });
+    if (req.profile!.role !== "admin") {
+      query = query.eq("cooperative_id", req.profile!.cooperative_id || "__none__");
+    }
+    const { data } = await query;
     const doc = new jsPDF();
     doc.setFontSize(18);
     doc.text("Jnatjo Market - Reporte de Fondo Comunitario", 14, 18);

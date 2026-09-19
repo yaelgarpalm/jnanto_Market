@@ -17,6 +17,9 @@ import {
   TraceabilityStage,
   UserRole,
   MaterialItem,
+  ProducerSettlementSummary,
+  CooperativeSettlementProducerSummary,
+  ProducerSettlement,
 } from "./types";
 
 // Components
@@ -34,6 +37,7 @@ import InventoryView from "./views/InventoryView";
 import FundView from "./views/FundView";
 import AdminView from "./views/AdminView";
 import PublicTracePage from "./views/PublicTracePage";
+import SettlementPanel from "./components/SettlementPanel";
 
 type CoreTab = "marketplace" | "purchases" | "producer" | "cooperative" | "inventory" | "fund" | "admin";
 type Tab = CoreTab | "account" | "cart";
@@ -104,6 +108,18 @@ export default function App() {
   const [purchaseOrders, setPurchaseOrders] = useState<Order[]>([]);
   const [salesOrders, setSalesOrders] = useState<Order[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
+  const todayForSettlement = new Date();
+  const [settlementPeriod, setSettlementPeriod] = useState({
+    from: new Date(todayForSettlement.getFullYear(), todayForSettlement.getMonth(), 1).toISOString().slice(0, 10),
+    to: todayForSettlement.toISOString().slice(0, 10),
+  });
+  const [producerSettlement, setProducerSettlement] = useState<ProducerSettlementSummary | null>(null);
+  const [cooperativeSettlement, setCooperativeSettlement] = useState<{
+    period_start: string;
+    period_end: string;
+    producers: CooperativeSettlementProducerSummary[];
+    settlements: ProducerSettlement[];
+  } | null>(null);
   const [confirmingPayment, setConfirmingPayment] = useState(false);
   const checkoutHandledRef = useRef(false);
 
@@ -201,8 +217,10 @@ export default function App() {
   const activeUserKey = session?.user.id || "guest";
   const cartStorageKey = `jnatjo-cart:${activeUserKey}`;
   const shippingStorageKey = `jnatjo-shipping:${activeUserKey}`;
-  const notificationStorageKey = `jnatjo-notifications:${activeUserKey}`;
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
+  const notificationTimersRef = useRef<Map<string, number>>(new Map());
+  const notificationSeenRef = useRef<Set<string>>(new Set());
+  const notificationActionLocksRef = useRef<Set<string>>(new Set());
 
   const [sensorForm, setSensorForm] = useState({
     productId: "",
@@ -259,8 +277,8 @@ export default function App() {
     return body as T;
   }
 
-  async function loadPublicData() {
-    setLoading(true);
+  async function loadPublicData(silent = false) {
+    if (!silent) setLoading(true);
     try {
       const [productRows, coopRows, producerRows, resourceRows, fund] = await Promise.all([
         api<Product[]>("/api/products?includePending=true"),
@@ -282,7 +300,7 @@ export default function App() {
         setSensorForm((prev) => ({ ...prev, productId: productRows[0].id }));
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -305,6 +323,23 @@ export default function App() {
       setOrders(Array.isArray(adminOrderRows) ? adminOrderRows : []);
       setMovements(Array.isArray(movementRows) ? movementRows : []);
       setRewardBalance(rewards && typeof rewards === 'object' ? rewards : { earnedPoints: 0, redeemedPoints: 0, availablePoints: 0, mxnPerPoint: 1, maxCheckoutPercent: 20 });
+
+      if (profileRow.role === "producer") {
+        setProducerSettlement(await api<ProducerSettlementSummary>(`/api/settlements/producer?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+        setCooperativeSettlement(null);
+      } else if (["cooperative", "inventory_manager", "admin"].includes(profileRow.role)) {
+        setCooperativeSettlement(await api<{
+          period_start: string;
+          period_end: string;
+          producers: CooperativeSettlementProducerSummary[];
+          settlements: ProducerSettlement[];
+        }>(`/api/settlements/cooperative?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+        setProducerSettlement(null);
+      } else {
+        setProducerSettlement(null);
+        setCooperativeSettlement(null);
+      }
+
       if (profileRow.role === "admin") {
         const adminProfileRows = await api<Profile[]>("/api/admin/profiles");
         setAdminProfiles(adminProfileRows);
@@ -313,6 +348,56 @@ export default function App() {
       }
     } catch (error) {
       console.warn(error);
+    }
+  }
+
+  async function reloadSettlements() {
+    if (!session || !profile) return;
+    try {
+      if (profile.role === "producer") {
+        setProducerSettlement(await api<ProducerSettlementSummary>(`/api/settlements/producer?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+      } else if (["cooperative", "inventory_manager", "admin"].includes(profile.role)) {
+        setCooperativeSettlement(await api<{
+          period_start: string;
+          period_end: string;
+          producers: CooperativeSettlementProducerSummary[];
+          settlements: ProducerSettlement[];
+        }>(`/api/settlements/cooperative?from=${settlementPeriod.from}&to=${settlementPeriod.to}`));
+      }
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudieron actualizar las liquidaciones."));
+    }
+  }
+
+  async function createProducerSettlement(producerId: string) {
+    try {
+      await api("/api/settlements", {
+        method: "POST",
+        body: JSON.stringify({
+          producerId,
+          periodStart: settlementPeriod.from,
+          periodEnd: settlementPeriod.to,
+          paymentMethod: "manual",
+        }),
+      });
+      setAuthMessage("Corte de liquidación creado correctamente.");
+      await reloadSettlements();
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo crear el corte de liquidación."));
+    }
+  }
+
+  async function payProducerSettlement(settlementId: string) {
+    const reference = window.prompt("Referencia del pago o comprobante (opcional):") || "";
+    try {
+      await api(`/api/settlements/${settlementId}/pay`, {
+        method: "POST",
+        body: JSON.stringify({ paymentMethod: "manual", paymentReference: reference }),
+      });
+      setAuthMessage("Pago de liquidación registrado.");
+      await reloadSettlements();
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar el pago de la liquidación."));
     }
   }
 
@@ -372,10 +457,15 @@ export default function App() {
     if (checkoutParams.checkout === "success" && checkoutParams.order) {
       checkoutHandledRef.current = true;
       confirmPayment(checkoutParams.order);
-    } else if (checkoutParams.checkout === "cancelled") {
+    } else if (checkoutParams.checkout === "cancelled" && checkoutParams.order) {
       checkoutHandledRef.current = true;
-      setAuthMessage("El pago fue cancelado. Puedes seguir explorando y comprar cuando gustes.");
+      api<{ success: boolean }>("/api/checkout/cancel", {
+        method: "POST",
+        body: JSON.stringify({ orderId: checkoutParams.order }),
+      }).catch(() => undefined);
+      setAuthMessage("El pago fue cancelado. Tus puntos de recompensa reservados fueron liberados.");
       window.history.pushState({}, "", "/");
+      loadPrivateData();
     }
   }, [authReady, checkoutParams, session]);
 
@@ -402,6 +492,15 @@ export default function App() {
   useEffect(() => {
     loadPrivateData();
   }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    const timer = window.setInterval(() => {
+      loadPrivateData();
+      if (!publicTraceCode) loadPublicData(true).catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [session?.user.id, publicTraceCode]);
 
   useEffect(() => {
     setCartHydrated(false);
@@ -431,20 +530,29 @@ export default function App() {
   }, [cart, cartHydrated, cartStorageKey]);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(notificationStorageKey);
-      setDismissedNotificationIds(saved ? JSON.parse(saved) : []);
-    } catch {
-      setDismissedNotificationIds([]);
-    }
-  }, [notificationStorageKey]);
+    setDismissedNotificationIds([]);
+    notificationTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    notificationTimersRef.current.clear();
+    notificationSeenRef.current.clear();
+  }, [session?.user.id]);
 
   function dismissNotification(id: string) {
-    setDismissedNotificationIds((current) => {
-      const next = Array.from(new Set([...current, id]));
-      localStorage.setItem(notificationStorageKey, JSON.stringify(next));
-      return next;
-    });
+    const timer = notificationTimersRef.current.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      notificationTimersRef.current.delete(id);
+    }
+    setDismissedNotificationIds((current) => Array.from(new Set([...current, id])));
+  }
+
+  async function runLockedAction<T>(key: string, task: () => Promise<T>): Promise<T | undefined> {
+    if (notificationActionLocksRef.current.has(key)) return undefined;
+    notificationActionLocksRef.current.add(key);
+    try {
+      return await task();
+    } finally {
+      notificationActionLocksRef.current.delete(key);
+    }
   }
 
   useEffect(() => {
@@ -531,6 +639,13 @@ export default function App() {
     setAuthForm(emptyAuthForm);
     setShippingForm(emptyShippingForm);
     setCart([]);
+    setProducerSettlement(null);
+    setCooperativeSettlement(null);
+    setDismissedNotificationIds([]);
+    setAuthMessage(null);
+    notificationTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    notificationTimersRef.current.clear();
+    notificationSeenRef.current.clear();
     setTab("marketplace");
   }
 
@@ -587,9 +702,12 @@ export default function App() {
     if (!profile) return [];
     const items: AppNotification[] = [];
     const safeProds = Array.isArray(products) ? products : [];
-    const ownProducts = profile.role === "producer"
-      ? safeProds.filter((product) => product.producerId === profile.id || product.producerName === profile.full_name)
-      : safeProds;
+    const ownProducts =
+      profile.role === "producer"
+        ? safeProds.filter((product) => product.producerId === profile.id || product.producerName === profile.full_name)
+        : ["cooperative", "verifier", "inventory_manager"].includes(profile.role)
+          ? safeProds.filter((product) => product.cooperativeId === profile.cooperative_id)
+          : safeProds;
 
     if (["producer", "cooperative", "inventory_manager", "admin"].includes(profile.role)) {
       ownProducts
@@ -730,6 +848,27 @@ export default function App() {
     return items.filter((item) => !dismissedNotificationIds.includes(item.id));
   }, [dismissedNotificationIds, fundMovements, products, profile, purchaseOrders, reservations, resources, salesOrders]);
 
+  useEffect(() => {
+    notificationItems.forEach((item) => {
+      if (notificationTimersRef.current.has(item.id)) return;
+      const timer = window.setTimeout(() => {
+        dismissNotification(item.id);
+        notificationTimersRef.current.delete(item.id);
+      }, 30000);
+      notificationTimersRef.current.set(item.id, timer);
+    });
+  }, [notificationItems]);
+
+  useEffect(() => {
+    if (notificationSeenRef.current.size === 0) {
+      notificationItems.forEach((item) => notificationSeenRef.current.add(item.id));
+      return;
+    }
+    const fresh = notificationItems.filter((item) => !notificationSeenRef.current.has(item.id));
+    fresh.forEach((item) => notificationSeenRef.current.add(item.id));
+    if (fresh.length > 0) setAuthMessage(fresh[0].title + ": " + fresh[0].body);
+  }, [notificationItems]);
+
   function addToCart(product: Product) {
     if (!canShop) {
       setAuthMessage("Solo las cuentas de cliente pueden comprar productos.");
@@ -804,6 +943,28 @@ export default function App() {
       `/api/traceability/code/${product.traceCode}`,
     );
     setAnchors(trace.anchors);
+  }
+
+  async function downloadAuthenticatedPdf(path: string, filename: string) {
+    try {
+      const response = await fetch(path, { headers: await authHeaders() });
+      if (!response.ok) throw new Error("No se pudo descargar el reporte.");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo descargar el reporte."));
+    }
+  }
+
+  async function downloadFundReport() {
+    await downloadAuthenticatedPdf("/api/reports/community-fund.pdf", "reporte-fondo-comunitario.pdf");
   }
 
   async function downloadProductQr(product: Product, orderId?: string) {
@@ -1039,31 +1200,49 @@ export default function App() {
       setAuthMessage("Completa recurso, cantidad, inicio, fin y notas para solicitar el préstamo.");
       return;
     }
-    await api("/api/resources/reservations", {
-      method: "POST",
-      body: JSON.stringify(reservationForm),
-    });
-    setAuthMessage("Solicitud de reserva de maquinaria registrada.");
-    setReservationForm({ resourceId: resources[0]?.id || "", quantity: 1, startDate: "", endDate: "", notes: "" });
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction("reserve-resource", async () => {
+        await api("/api/resources/reservations", {
+          method: "POST",
+          body: JSON.stringify(reservationForm),
+        });
+        setAuthMessage("Solicitud de reserva de maquinaria registrada.");
+        setReservationForm({ resourceId: resources[0]?.id || "", quantity: 1, startDate: "", endDate: "", notes: "" });
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar la reserva."));
+    }
   }
 
   async function updateReservation(id: string, status: "approved" | "completed" | "cancelled") {
-    await api(`/api/resources/reservations/${id}/status`, {
-      method: "POST",
-      body: JSON.stringify({ status }),
-    });
-    setAuthMessage(`Estado del préstamo actualizado a ${status}.`);
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction(`reservation-status:${id}`, async () => {
+        await api(`/api/resources/reservations/${id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status }),
+        });
+        setAuthMessage(`Estado del préstamo actualizado a ${status}.`);
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo actualizar la reservación."));
+    }
   }
 
   async function updateOrderFulfillment(orderId: string, status: "preparing" | "shipped" | "delivered" | "cancelled") {
-    await api(`/api/orders/${orderId}/fulfillment`, {
-      method: "POST",
-      body: JSON.stringify({ status }),
-    });
-    setAuthMessage(`Estado de entrega actualizado a ${status}.`);
-    await loadPrivateData();
+    try {
+      await runLockedAction(`order-fulfillment:${orderId}`, async () => {
+        await api(`/api/orders/${orderId}/fulfillment`, {
+          method: "POST",
+          body: JSON.stringify({ status }),
+        });
+        setAuthMessage(`Estado de entrega actualizado a ${status}.`);
+        await loadPrivateData();
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo actualizar el estado de entrega."));
+    }
   }
 
   async function createResource(event: FormEvent) {
@@ -1105,16 +1284,22 @@ export default function App() {
       setAuthMessage("Completa descripción y monto para registrar el gasto.");
       return;
     }
-    await api("/api/community-fund/expense", {
-      method: "POST",
-      body: JSON.stringify({
-        description: form.get("description"),
-        amount: form.get("amount"),
-      }),
-    });
-    event.currentTarget.reset();
-    setAuthMessage("Gasto registrado. Quedó pendiente de confirmación para descontarse del fondo comunal.");
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction("fund-expense", async () => {
+        await api("/api/community-fund/expense", {
+          method: "POST",
+          body: JSON.stringify({
+            description: form.get("description"),
+            amount: form.get("amount"),
+          }),
+        });
+        event.currentTarget.reset();
+        setAuthMessage("Gasto registrado. Quedó pendiente de confirmación para descontarse del fondo comunal.");
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar el gasto."));
+    }
   }
 
   async function confirmFundExpense(movementId: string) {
@@ -1136,12 +1321,18 @@ export default function App() {
       setAuthMessage("Completa producto, valor, unidad y ubicación para registrar telemetría.");
       return;
     }
-    await api("/api/sensors", {
-      method: "POST",
-      body: JSON.stringify(sensorForm),
-    });
-    setAuthMessage("Telemetría de sensor IoT registrada con éxito.");
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction("sensor-reading", async () => {
+        await api("/api/sensors", {
+          method: "POST",
+          body: JSON.stringify(sensorForm),
+        });
+        setAuthMessage("Telemetría de sensor IoT registrada con éxito.");
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar la telemetría."));
+    }
   }
 
   if (publicTraceCode) {
@@ -1301,6 +1492,10 @@ export default function App() {
               onImageUpload={uploadProductImages}
               onDownloadQr={downloadProductQr}
               onDownloadReport={downloadProducerReport}
+              settlementSummary={producerSettlement}
+              settlementPeriod={settlementPeriod}
+              setSettlementPeriod={setSettlementPeriod}
+              onReloadSettlements={reloadSettlements}
             />
           )}
 
@@ -1316,6 +1511,12 @@ export default function App() {
               onTrace={openTrace}
               onDownloadQr={downloadProductQr}
               onDownloadReport={downloadCoopReport}
+              settlementSummary={cooperativeSettlement}
+              settlementPeriod={settlementPeriod}
+              setSettlementPeriod={setSettlementPeriod}
+              onReloadSettlements={reloadSettlements}
+              onCreateSettlement={createProducerSettlement}
+              onPaySettlement={payProducerSettlement}
             />
           )}
 
@@ -1342,6 +1543,7 @@ export default function App() {
               canManage={Boolean(profile && ["admin", "cooperative", "inventory_manager"].includes(profile.role))}
               onExpense={addFundExpense}
               onConfirmExpense={confirmFundExpense}
+              onDownloadReport={downloadFundReport}
             />
           )}
 
