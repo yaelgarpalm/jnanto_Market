@@ -1,6 +1,7 @@
 import React, { FormEvent } from "react";
 import { Download, FileText, ImageUp, PackageCheck, Plus, QrCode, ReceiptText, Trash2 } from "lucide-react";
-import { MaterialItem, Order, Producer, Product, Profile } from "../types";
+import { MaterialItem, Order, Producer, Product, Profile, ProducerSettlementSummary } from "../types";
+import SettlementPanel from "../components/SettlementPanel";
 
 interface ProducerViewProps {
   profile: Profile | null;
@@ -15,6 +16,10 @@ interface ProducerViewProps {
   onImageUpload: (files: File[]) => void;
   onDownloadQr: (product: Product, orderId?: string) => void;
   onDownloadReport: () => void;
+  settlementSummary: ProducerSettlementSummary | null;
+  settlementPeriod: { from: string; to: string };
+  setSettlementPeriod: React.Dispatch<React.SetStateAction<{ from: string; to: string }>>;
+  onReloadSettlements: () => void;
 }
 
 const categories = [
@@ -49,6 +54,10 @@ export default function ProducerView({
   onImageUpload,
   onDownloadQr,
   onDownloadReport,
+  settlementSummary,
+  settlementPeriod,
+  setSettlementPeriod,
+  onReloadSettlements,
 }: ProducerViewProps) {
   const isProducerOrStaff = Boolean(profile && ["producer", "cooperative", "admin"].includes(profile.role));
   const isProducer = profile?.role === "producer";
@@ -115,6 +124,14 @@ export default function ProducerView({
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+      <SettlementPanel
+        mode="producer"
+        period={settlementPeriod}
+        setPeriod={setSettlementPeriod}
+        producerSummary={settlementSummary}
+        onReload={onReloadSettlements}
+      />
+
       <form onSubmit={onCreate} className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
         <div className="mb-4 flex gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FAF8F5] text-[#5A6A42] border border-[#E6E2DA]/50">
