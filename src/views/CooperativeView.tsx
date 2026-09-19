@@ -1,6 +1,7 @@
 import React from "react";
 import { CheckCircle2, Download, FileText, PackageCheck, QrCode, ShieldAlert } from "lucide-react";
-import { Order, Product, Profile, ResourceReservation } from "../types";
+import { CooperativeSettlementProducerSummary, Order, Product, Profile, ProducerSettlement, ResourceReservation } from "../types";
+import SettlementPanel from "../components/SettlementPanel";
 
 interface CooperativeViewProps {
   profile: Profile | null;
@@ -13,6 +14,17 @@ interface CooperativeViewProps {
   onTrace: (product: Product) => void;
   onDownloadQr: (product: Product, orderId?: string) => void;
   onDownloadReport: () => void;
+  settlementSummary: {
+    period_start: string;
+    period_end: string;
+    producers: CooperativeSettlementProducerSummary[];
+    settlements: ProducerSettlement[];
+  } | null;
+  settlementPeriod: { from: string; to: string };
+  setSettlementPeriod: React.Dispatch<React.SetStateAction<{ from: string; to: string }>>;
+  onReloadSettlements: () => void;
+  onCreateSettlement: (producerId: string) => void;
+  onPaySettlement: (settlementId: string) => void;
 }
 
 export default function CooperativeView({
@@ -26,6 +38,12 @@ export default function CooperativeView({
   onTrace,
   onDownloadQr,
   onDownloadReport,
+  settlementSummary,
+  settlementPeriod,
+  setSettlementPeriod,
+  onReloadSettlements,
+  onCreateSettlement,
+  onPaySettlement,
 }: CooperativeViewProps) {
   const isCoopOrStaff = Boolean(profile && ["cooperative", "verifier", "inventory_manager", "admin"].includes(profile.role));
   const pending = products.filter((item) => item.status === "pending");
@@ -47,6 +65,16 @@ export default function CooperativeView({
       </div>
 
       {/* Product Origin Verification */}
+      <SettlementPanel
+        mode="cooperative"
+        period={settlementPeriod}
+        setPeriod={setSettlementPeriod}
+        cooperativeSummary={settlementSummary}
+        onReload={onReloadSettlements}
+        onCreateSettlement={onCreateSettlement}
+        onPaySettlement={onPaySettlement}
+      />
+
       <div className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs flex flex-col justify-between">
         <div>
           <div className="mb-4 flex gap-3">
