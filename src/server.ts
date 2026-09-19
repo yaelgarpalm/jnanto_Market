@@ -1457,6 +1457,21 @@ app.post("/api/resources/reservations", requireAuth, async (req: AuthedRequest, 
   try {
     const { data: resource } = await supabase.from("shared_resources").select("*").eq("id", req.body.resourceId).maybeSingle();
     if (!resource) return res.status(404).json({ error: "Recurso no encontrado." });
+
+    const quantity = Math.max(money(req.body.quantity || 1), 1);
+    const availableQuantity = money(resource.quantity);
+    if (quantity > availableQuantity) {
+      return res.status(409).json({
+        error: "La cantidad solicitada (" + quantity + ") supera la disponibilidad actual del recurso (" + availableQuantity + ").",
+      });
+    }
+
+    const startDate = assertString(req.body.startDate);
+    const endDate = assertString(req.body.endDate);
+    if (!startDate || !endDate || new Date(startDate).getTime() >= new Date(endDate).getTime()) {
+      return res.status(400).json({ error: "El periodo de reservación no es válido." });
+    }
+
     const reservation = {
       id: `resv-${Date.now()}`,
       resource_id: resource.id,
@@ -1464,9 +1479,9 @@ app.post("/api/resources/reservations", requireAuth, async (req: AuthedRequest, 
       user_id: req.user!.id,
       user_name: req.profile!.full_name,
       cooperative_name: resource.cooperative_id,
-      start_date: req.body.startDate,
-      end_date: req.body.endDate,
-      quantity: Math.max(money(req.body.quantity || 1), 1),
+      start_date: startDate,
+      end_date: endDate,
+      quantity,
       status: "pending",
       notes: assertString(req.body.notes),
     };
