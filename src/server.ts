@@ -702,7 +702,10 @@ app.post("/api/auth/profile", requireUser, async (req: AuthedRequest, res, next)
 
 app.get("/api/cooperatives", async (_req, res, next) => {
   try {
-    const { data, error } = await supabase.from("cooperatives").select("*").order("name");
+    const { data, error } = await supabase
+      .from("cooperatives")
+      .select("id, name, municipality, community, representative")
+      .order("name");
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -712,7 +715,10 @@ app.get("/api/cooperatives", async (_req, res, next) => {
 
 app.get("/api/producers", async (_req, res, next) => {
   try {
-    const { data, error } = await supabase.from("producers").select("*").order("name");
+    const { data, error } = await supabase
+      .from("producers")
+      .select("id, name, community, cooperative_id, description, verified, avatar")
+      .order("name");
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -723,7 +729,13 @@ app.get("/api/producers", async (_req, res, next) => {
 app.get("/api/products", async (req, res, next) => {
   try {
     let query = supabase.from("products").select("*, product_images(*)").order("created_at", { ascending: false });
-    if (req.query.includePending !== "true") query = query.eq("status", "verified");
+    let allowPending = false;
+    if (req.query.includePending === "true") {
+      const user = await getUserFromRequest(req);
+      const privateProfile = user ? await getProfile(user.id) : null;
+      allowPending = Boolean(privateProfile && ["cooperative", "verifier", "inventory_manager", "admin"].includes(privateProfile.role));
+    }
+    if (!allowPending) query = query.eq("status", "verified");
     query = query.neq("status", "archived");
     if (req.query.category && req.query.category !== "Todos") query = query.eq("category", String(req.query.category));
     const { data, error } = await query;
@@ -1323,9 +1335,24 @@ app.post("/api/blockchain/anchor/:productId", requireAuth, requireRoles(["admin"
   }
 });
 
-app.get("/api/resources", async (_req, res, next) => {
+app.get("/api/resources", async (req, res, next) => {
   try {
-    const { data, error } = await supabase.from("shared_resources").select("*").order("name");
+    const user = await getUserFromRequest(req);
+    const privateProfile = user ? await getProfile(user.id) : null;
+    let query = supabase
+      .from("shared_resources")
+      .select("id, name, type, description, quantity, unit, cooperative_id, rental_cost, status, available_shared, low_stock_threshold")
+      .order("name");
+
+    if (privateProfile?.role === "admin") {
+      // Full operational view for administrators.
+    } else if (privateProfile && ["cooperative", "inventory_manager", "logistics", "verifier"].includes(privateProfile.role)) {
+      query = query.eq("cooperative_id", privateProfile.cooperative_id || "__none__");
+    } else {
+      query = query.eq("available_shared", true).eq("status", "available");
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -1566,12 +1593,32 @@ app.post("/api/resources/reservations/:id/status", requireAuth, requireRoles(["c
   }
 });
 
-app.get("/api/community-fund", async (_req, res, next) => {
+app.get("/api/community-fund", async (req, res, next) => {
   try {
-    const { data, error } = await supabase
+    const user = await getUserFromRequest(req);
+    const privateProfile = user ? await getProfile(user.id) : null;
+    let query = supabase
       .from("community_fund_movements")
-      .select("*")
+      .select("id, type, amount, description, responsible, evidence_url, order_id, cooperative_id, approval_status, approved_by, approved_at, created_at")
       .order("created_at", { ascending: false });
+
+    if (privateProfile?.role === "admin") {
+      // Global operational view.
+    } else if (privateProfile && ["cooperative", "inventory_manager", "verifier", "logistics"].includes(privateProfile.role)) {
+      query = query.eq("cooperative_id", privateProfile.cooperative_id || "__none__");
+    } else {
+      // Public/customer view: expose only an aggregate balance, never movement details.
+      const { data: incomes, error: incomeError } = await supabase
+        .from("community_fund_movements")
+        .select("type, amount, approval_status")
+        .eq("approval_status", "confirmed");
+      if (incomeError) throw incomeError;
+      const publicBalance = (incomes || []).reduce((sum, item) =>
+        item.type === "income" ? sum + money(item.amount) : sum - money(item.amount), 0);
+      return res.json({ balance: publicBalance, movements: [] });
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     const balance = (data || []).reduce((sum, item) => {
       if (item.type === "income") return sum + money(item.amount);
@@ -2109,6 +2156,18 @@ app.post("/api/orders/:id/fulfillment", requireAuth, requireRoles(["cooperative"
     }
 
     if (status === "cancelled" && order.status === "paid") {
+      const orderItemIds = (order.order_items || []).map((item: any) => item.id);
+      if (orderItemIds.length > 0) {
+        const { data: settledItems, error: settledItemsError } = await supabase
+          .from("producer_settlement_items")
+          .select("order_item_id, producer_settlements!inner(status)")
+          .in("order_item_id", orderItemIds)
+          .eq("producer_settlements.status", "paid");
+        if (settledItemsError) throw settledItemsError;
+        if ((settledItems || []).length > 0) {
+          return res.status(409).json({ error: "No se puede cancelar una orden cuyo pago al productor ya fue liquidado." });
+        }
+      }
       if (!stripe || !order.stripe_payment_intent_id) {
         return res.status(409).json({ error: "La orden pagada requiere un PaymentIntent de Stripe para procesar el reembolso." });
       }
@@ -2216,9 +2275,267 @@ app.post("/api/sensors", requireAuth, requireRoles(["logistics", "cooperative", 
   }
 });
 
-app.get("/api/reports/community-fund.pdf", async (_req, res, next) => {
+
+function settlementDate(value: unknown, fallback: string): string {
+  const raw = assertString(value, fallback);
+  return /^\\d{4}-\\d{2}-\\d{2}$/.test(raw) ? raw : fallback;
+}
+
+function defaultSettlementPeriod() {
+  const now = new Date();
+  const end = now.toISOString().slice(0, 10);
+  const startDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  return { start: startDate.toISOString().slice(0, 10), end };
+}
+
+async function getEligibleProducerItems(producerId: string, from: string, to: string) {
+  const { data: producer, error: producerError } = await supabase
+    .from("producers")
+    .select("id, name, cooperative_id")
+    .eq("id", producerId)
+    .maybeSingle();
+  if (producerError) throw producerError;
+  if (!producer) return { producer: null, items: [] };
+
+  const { data: products, error: productError } = await supabase
+    .from("products")
+    .select("id")
+    .eq("producer_id", producerId);
+  if (productError) throw productError;
+  const productIds = (products || []).map((row: any) => row.id);
+  if (productIds.length === 0) return { producer, items: [] };
+
+  const { data: items, error: itemError } = await supabase
+    .from("order_items")
+    .select("id, order_id, product_id, product_name, quantity, producer_pay")
+    .in("product_id", productIds);
+  if (itemError) throw itemError;
+  const orderIds = Array.from(new Set((items || []).map((item: any) => item.order_id)));
+  if (orderIds.length === 0) return { producer, items: [] };
+
+  const { data: orders, error: orderError } = await supabase
+    .from("orders")
+    .select("id, status, created_at, customer_name, customer_email")
+    .in("id", orderIds);
+  if (orderError) throw orderError;
+
+  const orderById = new Map((orders || []).map((order: any) => [order.id, order]));
+  const eligible = (items || []).filter((item: any) => {
+    const order = orderById.get(item.order_id);
+    const date = order?.created_at ? new Date(order.created_at).toISOString().slice(0, 10) : "";
+    return Boolean(order)
+      && ["paid", "shipped", "delivered"].includes(order.status)
+      && date >= from && date <= to;
+  }).map((item: any) => ({ ...item, order: orderById.get(item.order_id) }));
+
+  if (eligible.length === 0) return { producer, items: [] };
+
+  const itemIds = eligible.map((item: any) => item.id);
+  const { data: settledItems, error: settledError } = await supabase
+    .from("producer_settlement_items")
+    .select("order_item_id")
+    .in("order_item_id", itemIds);
+  if (settledError) throw settledError;
+  const settledIds = new Set((settledItems || []).map((item: any) => item.order_item_id));
+
+  return { producer, items: eligible.filter((item: any) => !settledIds.has(item.id)) };
+}
+
+app.get("/api/settlements/producer", requireAuth, requireRoles(["producer"]), async (req: AuthedRequest, res, next) => {
   try {
-    const { data } = await supabase.from("community_fund_movements").select("*").order("created_at", { ascending: false });
+    const defaults = defaultSettlementPeriod();
+    const from = settlementDate(req.query.from, defaults.start);
+    const to = settlementDate(req.query.to, defaults.end);
+    if (from > to) return res.status(400).json({ error: "El periodo de consulta no es válido." });
+
+    const { producer, items } = await getEligibleProducerItems(req.user!.id, from, to);
+    if (!producer) return res.status(404).json({ error: "Productor no encontrado." });
+
+    const { data: settlements, error: settlementError } = await supabase
+      .from("producer_settlements")
+      .select("*")
+      .eq("producer_id", req.user!.id)
+      .gte("period_end", from)
+      .lte("period_start", to)
+      .order("created_at", { ascending: false });
+    if (settlementError) throw settlementError;
+
+    const grossSales = items.reduce((sum: number, item: any) => sum + money(item.unit_price) * money(item.quantity), 0);
+    const eligibleAmount = items.reduce((sum: number, item: any) => sum + money(item.producer_pay), 0);
+    const paidAmount = (settlements || [])
+      .filter((row: any) => row.status === "paid")
+      .reduce((sum: number, row: any) => sum + money(row.amount), 0);
+    const pendingAmount = eligibleAmount + (settlements || [])
+      .filter((row: any) => row.status === "pending")
+      .reduce((sum: number, row: any) => sum + money(row.amount), 0);
+
+    return res.json({
+      period_start: from,
+      period_end: to,
+      gross_sales: grossSales,
+      eligible_amount: eligibleAmount,
+      pending_amount: pendingAmount,
+      paid_amount: paidAmount,
+      sale_count: new Set(items.map((item: any) => item.order_id)).size,
+      eligible_item_count: items.length,
+      settlements: settlements || [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/settlements/cooperative", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const defaults = defaultSettlementPeriod();
+    const from = settlementDate(req.query.from, defaults.start);
+    const to = settlementDate(req.query.to, defaults.end);
+    if (from > to) return res.status(400).json({ error: "El periodo de consulta no es válido." });
+
+    const { data: producers, error: producerError } = await supabase
+      .from("producers")
+      .select("id, name, cooperative_id")
+      .order("name");
+    if (producerError) throw producerError;
+
+    const scopedProducers = (producers || []).filter((producer: any) =>
+      req.profile!.role === "admin" || producer.cooperative_id === req.profile!.cooperative_id,
+    );
+
+    const summaries = [];
+    for (const producer of scopedProducers) {
+      const { items } = await getEligibleProducerItems(producer.id, from, to);
+      const eligibleAmount = items.reduce((sum: number, item: any) => sum + money(item.producer_pay), 0);
+      const orderCount = new Set(items.map((item: any) => item.order_id)).size;
+      const { data: pendingSettlements } = await supabase
+        .from("producer_settlements")
+        .select("amount")
+        .eq("producer_id", producer.id)
+        .eq("status", "pending")
+        .gte("period_end", from)
+        .lte("period_start", to);
+      const pendingSettlementAmount = (pendingSettlements || []).reduce((sum: number, row: any) => sum + money(row.amount), 0);
+      summaries.push({
+        producer_id: producer.id,
+        producer_name: producer.name,
+        eligible_amount: eligibleAmount,
+        sale_count: orderCount,
+        eligible_item_count: items.length,
+        pending_settlement_amount: pendingSettlementAmount,
+      });
+    }
+
+    const { data: settlements, error: settlementError } = await supabase
+      .from("producer_settlements")
+      .select("*")
+      .in("cooperative_id", req.profile!.role === "admin"
+        ? scopedProducers.map((producer: any) => producer.cooperative_id)
+        : [req.profile!.cooperative_id])
+      .gte("period_end", from)
+      .lte("period_start", to)
+      .order("created_at", { ascending: false });
+    if (settlementError) throw settlementError;
+
+    res.json({ period_start: from, period_end: to, producers: summaries, settlements: settlements || [] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settlements", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const producerId = assertString(req.body.producerId);
+    const defaults = defaultSettlementPeriod();
+    const from = settlementDate(req.body.periodStart, defaults.start);
+    const to = settlementDate(req.body.periodEnd, defaults.end);
+    if (!producerId || from > to) return res.status(400).json({ error: "Indica productor y un periodo válido." });
+
+    const { producer, items } = await getEligibleProducerItems(producerId, from, to);
+    if (!producer) return res.status(404).json({ error: "Productor no encontrado." });
+    if (req.profile!.role !== "admin" && producer.cooperative_id !== req.profile!.cooperative_id) {
+      return res.status(403).json({ error: "No puedes liquidar a un productor de otra cooperativa." });
+    }
+    if (items.length === 0) return res.status(409).json({ error: "No hay ventas pendientes de liquidar en el periodo seleccionado." });
+
+    const amount = items.reduce((sum: number, item: any) => sum + money(item.producer_pay), 0);
+    const { data: settlement, error: settlementError } = await supabase
+      .from("producer_settlements")
+      .insert({
+        producer_id: producerId,
+        cooperative_id: producer.cooperative_id,
+        period_start: from,
+        period_end: to,
+        amount,
+        status: "pending",
+        payment_method: assertString(req.body.paymentMethod) || null,
+        notes: assertString(req.body.notes) || null,
+        created_by: req.user!.id,
+      })
+      .select("*")
+      .single();
+    if (settlementError) throw settlementError;
+
+    const { error: itemError } = await supabase.from("producer_settlement_items").insert(
+      items.map((item: any) => ({
+        settlement_id: settlement.id,
+        order_item_id: item.id,
+        amount: money(item.producer_pay),
+      })),
+    );
+    if (itemError) throw itemError;
+
+    res.status(201).json({ ...settlement, item_count: items.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settlements/:id/pay", requireAuth, requireRoles(["cooperative", "inventory_manager", "admin"]), async (req: AuthedRequest, res, next) => {
+  try {
+    const { data: settlement, error } = await supabase
+      .from("producer_settlements")
+      .select("*")
+      .eq("id", req.params.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!settlement) return res.status(404).json({ error: "Liquidación no encontrada." });
+    if (req.profile!.role !== "admin" && settlement.cooperative_id !== req.profile!.cooperative_id) {
+      return res.status(403).json({ error: "No puedes pagar liquidaciones de otra cooperativa." });
+    }
+    if (settlement.status !== "pending") return res.status(409).json({ error: "Solo se pueden pagar liquidaciones pendientes." });
+
+    const { data, error: updateError } = await supabase
+      .from("producer_settlements")
+      .update({
+        status: "paid",
+        payment_method: assertString(req.body.paymentMethod, settlement.payment_method || "manual"),
+        payment_reference: assertString(req.body.paymentReference) || null,
+        evidence_url: assertString(req.body.evidenceUrl) || null,
+        notes: assertString(req.body.notes, settlement.notes || "") || null,
+        paid_by: req.user!.id,
+        paid_at: new Date().toISOString(),
+      })
+      .eq("id", settlement.id)
+      .eq("status", "pending")
+      .select("*")
+      .single();
+    if (updateError) throw updateError;
+    res.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    let query = supabase
+      .from("community_fund_movements")
+      .select("id, type, amount, description, responsible, cooperative_id, approval_status, created_at")
+      .order("created_at", { ascending: false });
+    if (req.profile!.role !== "admin") {
+      query = query.eq("cooperative_id", req.profile!.cooperative_id || "__none__");
+    }
+    const { data } = await query;
     const doc = new jsPDF();
     doc.setFontSize(18);
     doc.text("Jnatjo Market - Reporte de Fondo Comunitario", 14, 18);
