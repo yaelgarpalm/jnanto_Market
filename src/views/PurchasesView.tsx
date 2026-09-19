@@ -1,15 +1,17 @@
 import React from "react";
 import { PackageCheck, QrCode, ReceiptText } from "lucide-react";
 import { Order, Product, Profile } from "../types";
+import ReportCard from "../components/ReportCard";
 
 interface PurchasesViewProps {
   profile: Profile | null;
   orders: Order[];
   products: Product[];
   onTrace: (product: Product) => void;
+  onDownloadReport: () => void;
 }
 
-export default function PurchasesView({ profile, orders, products, onTrace }: PurchasesViewProps) {
+export default function PurchasesView({ profile, orders, products, onTrace, onDownloadReport }: PurchasesViewProps) {
   const productById = new Map(products.map((product) => [product.id, product]));
   const totalPoints = orders.reduce((sum, order) => sum + Number(order.reward_points || 0), 0);
   const statusLabel: Record<string, string> = {
@@ -23,6 +25,12 @@ export default function PurchasesView({ profile, orders, products, onTrace }: Pu
 
   return (
     <div className="space-y-5">
+      <ReportCard
+        title="Reporte de compras"
+        description="PDF estandarizado con tu historial de pedidos, estados de entrega, total comprado y puntos generados."
+        buttonLabel="Generar y descargar PDF"
+        onDownload={onDownloadReport}
+      />
       <div className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
         <div className="flex items-start gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FAF8F5] text-[#5A6A42] border border-[#E6E2DA]/50">
