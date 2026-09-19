@@ -531,27 +531,6 @@ export default function App() {
     notificationSeenRef.current.clear();
   }, [session?.user.id]);
 
-  useEffect(() => {
-    notificationItems.forEach((item) => {
-      if (notificationTimersRef.current.has(item.id)) return;
-      const timer = window.setTimeout(() => {
-        dismissNotification(item.id);
-        notificationTimersRef.current.delete(item.id);
-      }, 30000);
-      notificationTimersRef.current.set(item.id, timer);
-    });
-  }, [notificationItems]);
-
-  useEffect(() => {
-    if (notificationSeenRef.current.size === 0) {
-      notificationItems.forEach((item) => notificationSeenRef.current.add(item.id));
-      return;
-    }
-    const fresh = notificationItems.filter((item) => !notificationSeenRef.current.has(item.id));
-    fresh.forEach((item) => notificationSeenRef.current.add(item.id));
-    if (fresh.length > 0) setAuthMessage(fresh[0].title + ": " + fresh[0].body);
-  }, [notificationItems]);
-
   function dismissNotification(id: string) {
     const timer = notificationTimersRef.current.get(id);
     if (timer) {
@@ -853,6 +832,27 @@ export default function App() {
 
     return items.filter((item) => !dismissedNotificationIds.includes(item.id));
   }, [dismissedNotificationIds, fundMovements, products, profile, purchaseOrders, reservations, resources, salesOrders]);
+
+  useEffect(() => {
+    notificationItems.forEach((item) => {
+      if (notificationTimersRef.current.has(item.id)) return;
+      const timer = window.setTimeout(() => {
+        dismissNotification(item.id);
+        notificationTimersRef.current.delete(item.id);
+      }, 30000);
+      notificationTimersRef.current.set(item.id, timer);
+    });
+  }, [notificationItems]);
+
+  useEffect(() => {
+    if (notificationSeenRef.current.size === 0) {
+      notificationItems.forEach((item) => notificationSeenRef.current.add(item.id));
+      return;
+    }
+    const fresh = notificationItems.filter((item) => !notificationSeenRef.current.has(item.id));
+    fresh.forEach((item) => notificationSeenRef.current.add(item.id));
+    if (fresh.length > 0) setAuthMessage(fresh[0].title + ": " + fresh[0].body);
+  }, [notificationItems]);
 
   function addToCart(product: Product) {
     if (!canShop) {
