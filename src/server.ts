@@ -23,6 +23,7 @@ const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 const POLYGON_RPC_URL = process.env.POLYGON_RPC_URL;
 const BLOCKCHAIN_PRIVATE_KEY = process.env.BLOCKCHAIN_PRIVATE_KEY;
+const PORT = Number(process.env.PORT || 3000);
 const AMOY_CHAIN_ID = 80002;
 const websocketTransport = WebSocket as unknown as typeof globalThis.WebSocket;
 
