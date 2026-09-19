@@ -24,7 +24,12 @@ interface CooperativeViewProps {
   setSettlementPeriod: React.Dispatch<React.SetStateAction<{ from: string; to: string }>>;
   onReloadSettlements: () => void;
   onCreateSettlement: (producerId: string) => void;
-  onPaySettlement: (settlementId: string) => void;
+  onPaySettlement: (
+    settlementId: string,
+    paymentMethod: "transferencia" | "efectivo" | "deposito" | "otro",
+    paymentReference: string,
+    notes: string,
+  ) => Promise<void> | void;
 }
 
 export default function CooperativeView({
