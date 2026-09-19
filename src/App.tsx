@@ -634,6 +634,13 @@ export default function App() {
     setAuthForm(emptyAuthForm);
     setShippingForm(emptyShippingForm);
     setCart([]);
+    setProducerSettlement(null);
+    setCooperativeSettlement(null);
+    setDismissedNotificationIds([]);
+    setAuthMessage(null);
+    notificationTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    notificationTimersRef.current.clear();
+    notificationSeenRef.current.clear();
     setTab("marketplace");
   }
 
