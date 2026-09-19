@@ -457,10 +457,15 @@ export default function App() {
     if (checkoutParams.checkout === "success" && checkoutParams.order) {
       checkoutHandledRef.current = true;
       confirmPayment(checkoutParams.order);
-    } else if (checkoutParams.checkout === "cancelled") {
+    } else if (checkoutParams.checkout === "cancelled" && checkoutParams.order) {
       checkoutHandledRef.current = true;
-      setAuthMessage("El pago fue cancelado. Puedes seguir explorando y comprar cuando gustes.");
+      api<{ success: boolean }>("/api/checkout/cancel", {
+        method: "POST",
+        body: JSON.stringify({ orderId: checkoutParams.order }),
+      }).catch(() => undefined);
+      setAuthMessage("El pago fue cancelado. Tus puntos de recompensa reservados fueron liberados.");
       window.history.pushState({}, "", "/");
+      loadPrivateData();
     }
   }, [authReady, checkoutParams, session]);
 
@@ -1257,16 +1262,22 @@ export default function App() {
       setAuthMessage("Completa descripción y monto para registrar el gasto.");
       return;
     }
-    await api("/api/community-fund/expense", {
-      method: "POST",
-      body: JSON.stringify({
-        description: form.get("description"),
-        amount: form.get("amount"),
-      }),
-    });
-    event.currentTarget.reset();
-    setAuthMessage("Gasto registrado. Quedó pendiente de confirmación para descontarse del fondo comunal.");
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction("fund-expense", async () => {
+        await api("/api/community-fund/expense", {
+          method: "POST",
+          body: JSON.stringify({
+            description: form.get("description"),
+            amount: form.get("amount"),
+          }),
+        });
+        event.currentTarget.reset();
+        setAuthMessage("Gasto registrado. Quedó pendiente de confirmación para descontarse del fondo comunal.");
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar el gasto."));
+    }
   }
 
   async function confirmFundExpense(movementId: string) {
