@@ -11,7 +11,7 @@ interface FundViewProps {
   onDownloadReport: () => void;
 }
 
-export default function FundView({ balance, movements, canManage, onExpense, onConfirmExpense }: FundViewProps) {
+export default function FundView({ balance, movements, canManage, onExpense, onConfirmExpense, onDownloadReport }: FundViewProps) {
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
       <div className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs">
