@@ -1163,31 +1163,49 @@ export default function App() {
       setAuthMessage("Completa recurso, cantidad, inicio, fin y notas para solicitar el préstamo.");
       return;
     }
-    await api("/api/resources/reservations", {
-      method: "POST",
-      body: JSON.stringify(reservationForm),
-    });
-    setAuthMessage("Solicitud de reserva de maquinaria registrada.");
-    setReservationForm({ resourceId: resources[0]?.id || "", quantity: 1, startDate: "", endDate: "", notes: "" });
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction("reserve-resource", async () => {
+        await api("/api/resources/reservations", {
+          method: "POST",
+          body: JSON.stringify(reservationForm),
+        });
+        setAuthMessage("Solicitud de reserva de maquinaria registrada.");
+        setReservationForm({ resourceId: resources[0]?.id || "", quantity: 1, startDate: "", endDate: "", notes: "" });
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar la reserva."));
+    }
   }
 
   async function updateReservation(id: string, status: "approved" | "completed" | "cancelled") {
-    await api(`/api/resources/reservations/${id}/status`, {
-      method: "POST",
-      body: JSON.stringify({ status }),
-    });
-    setAuthMessage(`Estado del préstamo actualizado a ${status}.`);
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction(`reservation-status:${id}`, async () => {
+        await api(`/api/resources/reservations/${id}/status`, {
+          method: "POST",
+          body: JSON.stringify({ status }),
+        });
+        setAuthMessage(`Estado del préstamo actualizado a ${status}.`);
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo actualizar la reservación."));
+    }
   }
 
   async function updateOrderFulfillment(orderId: string, status: "preparing" | "shipped" | "delivered" | "cancelled") {
-    await api(`/api/orders/${orderId}/fulfillment`, {
-      method: "POST",
-      body: JSON.stringify({ status }),
-    });
-    setAuthMessage(`Estado de entrega actualizado a ${status}.`);
-    await loadPrivateData();
+    try {
+      await runLockedAction(`order-fulfillment:${orderId}`, async () => {
+        await api(`/api/orders/${orderId}/fulfillment`, {
+          method: "POST",
+          body: JSON.stringify({ status }),
+        });
+        setAuthMessage(`Estado de entrega actualizado a ${status}.`);
+        await loadPrivateData();
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo actualizar el estado de entrega."));
+    }
   }
 
   async function createResource(event: FormEvent) {
@@ -1260,12 +1278,18 @@ export default function App() {
       setAuthMessage("Completa producto, valor, unidad y ubicación para registrar telemetría.");
       return;
     }
-    await api("/api/sensors", {
-      method: "POST",
-      body: JSON.stringify(sensorForm),
-    });
-    setAuthMessage("Telemetría de sensor IoT registrada con éxito.");
-    await Promise.all([loadPublicData(), loadPrivateData()]);
+    try {
+      await runLockedAction("sensor-reading", async () => {
+        await api("/api/sensors", {
+          method: "POST",
+          body: JSON.stringify(sensorForm),
+        });
+        setAuthMessage("Telemetría de sensor IoT registrada con éxito.");
+        await Promise.all([loadPublicData(), loadPrivateData()]);
+      });
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo registrar la telemetría."));
+    }
   }
 
   if (publicTraceCode) {
