@@ -2385,6 +2385,13 @@ function settlementDate(value: unknown, fallback: string): string {
   return /^\\d{4}-\\d{2}-\\d{2}$/.test(raw) ? raw : fallback;
 }
 
+const SETTLEMENT_PAYMENT_METHODS = new Set(["transferencia", "efectivo", "deposito", "otro"]);
+
+function getSettlementPaymentMethod(value: unknown): string | null {
+  const method = assertString(value).toLowerCase();
+  return SETTLEMENT_PAYMENT_METHODS.has(method) ? method : null;
+}
+
 function defaultSettlementPeriod() {
   const now = new Date();
   const end = now.toISOString().slice(0, 10);
@@ -2606,12 +2613,22 @@ app.post("/api/settlements/:id/pay", requireAuth, requireRoles(["cooperative", "
     }
     if (settlement.status !== "pending") return res.status(409).json({ error: "Solo se pueden pagar liquidaciones pendientes." });
 
+    const paymentMethod = getSettlementPaymentMethod(req.body.paymentMethod);
+    if (!paymentMethod) {
+      return res.status(400).json({ error: "Selecciona una forma de pago válida: transferencia, efectivo, depósito u otro." });
+    }
+
+    const paymentReference = assertString(req.body.paymentReference);
+    if (!paymentReference) {
+      return res.status(400).json({ error: "La referencia, folio o comprobante del pago es obligatoria." });
+    }
+
     const { data, error: updateError } = await supabase
       .from("producer_settlements")
       .update({
         status: "paid",
-        payment_method: assertString(req.body.paymentMethod, settlement.payment_method || "manual"),
-        payment_reference: assertString(req.body.paymentReference) || null,
+        payment_method: paymentMethod,
+        payment_reference: paymentReference,
         evidence_url: assertString(req.body.evidenceUrl) || null,
         notes: assertString(req.body.notes, settlement.notes || "") || null,
         paid_by: req.user!.id,

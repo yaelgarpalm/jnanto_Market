@@ -377,7 +377,6 @@ export default function App() {
           producerId,
           periodStart: settlementPeriod.from,
           periodEnd: settlementPeriod.to,
-          paymentMethod: "manual",
         }),
       });
       setAuthMessage("Corte de liquidación creado correctamente.");
@@ -387,17 +386,21 @@ export default function App() {
     }
   }
 
-  async function payProducerSettlement(settlementId: string) {
-    const reference = window.prompt("Referencia del pago o comprobante (opcional):") || "";
+  async function payProducerSettlement(
+    settlementId: string,
+    paymentMethod: "transferencia" | "efectivo" | "deposito" | "otro",
+    paymentReference: string,
+    notes: string,
+  ) {
     try {
       await api(`/api/settlements/${settlementId}/pay`, {
         method: "POST",
-        body: JSON.stringify({ paymentMethod: "manual", paymentReference: reference }),
+        body: JSON.stringify({ paymentMethod, paymentReference, notes }),
       });
       setAuthMessage("Pago de liquidación registrado.");
       await reloadSettlements();
     } catch (error) {
-      setAuthMessage(getFriendlyError(error, "No se pudo registrar el pago de la liquidación."));
+      throw new Error(getFriendlyError(error, "No se pudo registrar el pago de la liquidación."));
     }
   }
 
