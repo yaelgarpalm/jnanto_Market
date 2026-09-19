@@ -75,6 +75,126 @@ function money(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+type ReportMetric = { label: string; value: string };
+
+const REPORT_DARK = [45, 45, 42] as const;
+const REPORT_GREEN = [90, 106, 66] as const;
+const REPORT_MUTED = [107, 102, 95] as const;
+const REPORT_LIGHT = [250, 248, 245] as const;
+const REPORT_BORDER = [230, 226, 218] as const;
+
+function reportMoney(value: unknown): string {
+  return money(value).toLocaleString("es-MX", { style: "currency", currency: "MXN" });
+}
+
+function reportDate(value: unknown): string {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function drawStandardHeader(
+  doc: jsPDF,
+  title: string,
+  subtitle: string,
+  subject: string,
+  period = "Histórico",
+): number {
+  const pageW = 210;
+  doc.setFillColor(...REPORT_DARK);
+  doc.rect(0, 0, pageW, 31, "F");
+  doc.setFillColor(...REPORT_GREEN);
+  doc.rect(0, 31, pageW, 2, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(17);
+  doc.text("JNATJO MARKET", 14, 13);
+  doc.setFontSize(9);
+  doc.text(subtitle, 14, 22);
+  doc.setFontSize(8);
+  doc.text(new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" }), pageW - 14, 13, { align: "right" });
+
+  let y = 43;
+  doc.setTextColor(...REPORT_DARK);
+  doc.setFontSize(15);
+  doc.text(title, 14, y);
+  y += 7;
+  doc.setFontSize(9);
+  doc.setTextColor(...REPORT_MUTED);
+  const subjectLines = doc.splitTextToSize(subject, pageW - 28);
+  doc.text(subjectLines, 14, y);
+  y += subjectLines.length * 4.5 + 3;
+  doc.setFillColor(...REPORT_LIGHT);
+  doc.setDrawColor(...REPORT_BORDER);
+  doc.roundedRect(14, y, pageW - 28, 10, 2, 2, "FD");
+  doc.setFontSize(7.5);
+  doc.setTextColor(...REPORT_MUTED);
+  doc.text("PERIODO", 18, y + 4);
+  doc.setTextColor(...REPORT_DARK);
+  doc.setFontSize(8.5);
+  doc.text(period, 18, y + 8);
+  return y + 16;
+}
+
+function drawStandardMetrics(doc: jsPDF, metrics: ReportMetric[], y: number): number {
+  const pageW = 210;
+  const gap = 3;
+  const cols = Math.min(metrics.length, 4);
+  const boxW = (pageW - 28 - gap * (cols - 1)) / cols;
+  metrics.forEach((metric, index) => {
+    const row = Math.floor(index / cols);
+    const col = index % cols;
+    const bx = 14 + col * (boxW + gap);
+    const by = y + row * 27;
+    doc.setFillColor(...REPORT_LIGHT);
+    doc.setDrawColor(...REPORT_BORDER);
+    doc.roundedRect(bx, by, boxW, 22, 2, 2, "FD");
+    doc.setFontSize(6.5);
+    doc.setTextColor(...REPORT_MUTED);
+    doc.text(metric.label, bx + 3, by + 7);
+    doc.setFontSize(11);
+    doc.setTextColor(...REPORT_DARK);
+    doc.text(metric.value, bx + 3, by + 17);
+  });
+  return y + Math.ceil(metrics.length / cols) * 27;
+}
+
+function drawStandardSection(doc: jsPDF, title: string, y: number): number {
+  if (y > 262) {
+    doc.addPage();
+    y = 20;
+  }
+  doc.setFontSize(10);
+  doc.setTextColor(...REPORT_DARK);
+  doc.text(title, 14, y);
+  y += 4;
+  doc.setFillColor(...REPORT_GREEN);
+  doc.rect(14, y, 182, 0.7, "F");
+  return y + 7;
+}
+
+function drawStandardTableHeader(doc: jsPDF, headers: string[], columns: number[], y: number): number {
+  doc.setFillColor(...REPORT_LIGHT);
+  doc.rect(14, y - 5, 182, 7, "F");
+  doc.setFontSize(7);
+  doc.setTextColor(...REPORT_MUTED);
+  headers.forEach((header, index) => doc.text(header, columns[index], y));
+  return y + 6;
+}
+
+function drawStandardFooter(doc: jsPDF) {
+  const pages = doc.getNumberOfPages();
+  for (let page = 1; page <= pages; page += 1) {
+    doc.setPage(page);
+    const pageH = doc.internal.pageSize.getHeight();
+    doc.setDrawColor(...REPORT_BORDER);
+    doc.line(14, pageH - 15, 196, pageH - 15);
+    doc.setFontSize(7);
+    doc.setTextColor(...REPORT_MUTED);
+    doc.text("Jnatjo Market · Comercio Justo y Trazabilidad Artesanal", 14, pageH - 9);
+    doc.text("Página " + page + " de " + pages, 196, pageH - 9, { align: "right" });
+  }
+}
+
 function assertString(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
@@ -2647,35 +2767,79 @@ app.post("/api/settlements/:id/pay", requireAuth, requireRoles(["cooperative", "
 
 app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
+    const profile = req.profile!;
     let query = supabase
       .from("community_fund_movements")
       .select("id, type, amount, description, responsible, cooperative_id, approval_status, created_at")
       .order("created_at", { ascending: false });
-    if (req.profile!.role !== "admin") {
-      query = query.eq("cooperative_id", req.profile!.cooperative_id || "__none__");
+
+    if (profile.role !== "admin") {
+      if (!profile.cooperative_id) return res.status(403).json({ error: "Tu cuenta no tiene una cooperativa asignada." });
+      query = query.eq("cooperative_id", profile.cooperative_id);
     }
-    const { data, error: fundError } = await query;
-    if (fundError) throw fundError;
+
+    const { data: movements, error } = await query;
+    if (error) throw error;
+
+    const rows = movements || [];
+    const income = rows.filter((row: any) => row.type === "income").reduce((sum, row) => sum + money(row.amount), 0);
+    const expense = rows.filter((row: any) => row.type !== "income").reduce((sum, row) => sum + money(row.amount), 0);
+    const approved = rows.filter((row: any) => row.approval_status === "approved").length;
+    const pending = rows.length - approved;
+
     const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("Jnatjo Market - Reporte de Fondo Comunitario", 14, 18);
-    doc.setFontSize(10);
-    let y = 30;
-    let balance = 0;
-    for (const item of data || []) {
-      balance += item.type === "income" ? money(item.amount) : -money(item.amount);
-      doc.text(`${item.type.toUpperCase()} $${item.amount} MXN - ${item.description}`.slice(0, 100), 14, y);
-      y += 8;
-      if (y > 280) {
-        doc.addPage();
-        y = 18;
+    let y = drawStandardHeader(
+      doc,
+      "Reporte financiero del fondo comunitario",
+      "Control financiero y transparencia",
+      profile.role === "admin" ? "Fondo comunitario consolidado de la plataforma." : "Fondo comunitario del ámbito operativo asignado.",
+      "Histórico",
+    );
+    y = drawStandardMetrics(doc, [
+      { label: "INGRESOS", value: reportMoney(income) },
+      { label: "EGRESOS", value: reportMoney(expense) },
+      { label: "BALANCE", value: reportMoney(income - expense) },
+      { label: "MOVIMIENTOS", value: String(rows.length) },
+    ], y) + 3;
+
+    y = drawStandardSection(doc, "Detalle de movimientos", y);
+    const columns = [14, 36, 70, 118, 156, 184];
+    y = drawStandardTableHeader(doc, ["FECHA", "TIPO", "DESCRIPCIÓN", "RESPONSABLE", "ESTADO", "MONTO"], columns, y);
+
+    if (!rows.length) {
+      doc.setFontSize(8);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No existen movimientos registrados para este ámbito.", 14, y + 6);
+    } else {
+      for (const row of rows) {
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Detalle de movimientos · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "TIPO", "DESCRIPCIÓN", "RESPONSABLE", "ESTADO", "MONTO"], columns, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(row.created_at), columns[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(row.type || "—").toUpperCase().slice(0, 8), columns[1], y);
+        doc.text(String(row.description || "Sin descripción").slice(0, 24), columns[2], y);
+        doc.text(String(row.responsible || "—").slice(0, 20), columns[3], y);
+        doc.text(String(row.approval_status || "—").slice(0, 10), columns[4], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(reportMoney(row.amount), columns[5], y, { align: "right" });
+        y += 7;
       }
     }
-    doc.setFontSize(13);
-    doc.text(`Balance: $${balance} MXN`, 14, y + 8);
+
+    y = drawStandardSection(doc, "Indicadores de control", y + 3);
+    doc.setFontSize(8);
+    doc.setTextColor(...REPORT_DARK);
+    doc.text("Movimientos aprobados: " + approved + " · pendientes: " + pending, 14, y);
+    drawStandardFooter(doc);
+
     const pdf = Buffer.from(doc.output("arraybuffer"));
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline; filename=jnatjo-fondo-comunitario.pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-fondo-comunitario.pdf");
     res.send(pdf);
   } catch (error) {
     next(error);
@@ -2685,16 +2849,17 @@ app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedReques
 app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const profile = req.profile!;
-    let producerId: string;
+    let producerId = "";
     if (profile.role === "producer") {
       producerId = req.user!.id;
     } else if (profile.role === "admin") {
       producerId = assertString(req.query.producerId);
-      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
+      if (!producerId) return res.status(400).json({ error: "Selecciona un productor para generar el reporte." });
     } else if (["cooperative", "inventory_manager", "logistics", "verifier"].includes(profile.role)) {
       producerId = assertString(req.query.producerId);
-      if (!producerId) return res.status(400).json({ error: "Indica el productor para generar el reporte." });
-      const { data: scopedProducer } = await supabase.from("producers").select("cooperative_id").eq("id", producerId).maybeSingle();
+      if (!producerId) return res.status(400).json({ error: "Selecciona un productor para generar el reporte." });
+      const { data: scopedProducer, error } = await supabase.from("producers").select("cooperative_id").eq("id", producerId).maybeSingle();
+      if (error) throw error;
       if (!scopedProducer || !canAccessCooperative(req, scopedProducer.cooperative_id)) {
         return res.status(403).json({ error: "No puedes consultar el reporte de otro ámbito operativo." });
       }
@@ -2717,141 +2882,69 @@ app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res
     if (productsError) throw productsError;
 
     const productIds = (productsRows || []).map((p: any) => p.id);
-
     let salesItems: any[] = [];
-    if (productIds.length > 0) {
-      const { data: items, error: itemsError } = await supabase
+    if (productIds.length) {
+      const { data: items, error } = await supabase
         .from("order_items")
-        .select("id, product_id, product_name, quantity, unit_price, producer_pay, community_fund, orders(id, status, customer_name, customer_email, created_at)")
+        .select("id, product_id, product_name, quantity, unit_price, producer_pay, community_fund, orders(id, status, created_at)")
         .in("product_id", productIds);
-      if (itemsError) throw itemsError;
-      salesItems = (items || []).filter((item: any) =>
-        ["paid", "shipped", "delivered"].includes(item.orders?.status),
-      );
+      if (error) throw error;
+      salesItems = (items || []).filter((item: any) => ["paid", "shipped", "delivered"].includes(item.orders?.status));
     }
 
-    const totalSales = salesItems.reduce((s: number, i: any) => s + money(i.unit_price) * money(i.quantity), 0);
-    const totalProducerPay = salesItems.reduce((s: number, i: any) => s + money(i.producer_pay), 0);
-    const totalCommunityFund = salesItems.reduce((s: number, i: any) => s + money(i.community_fund), 0);
-    const totalUnits = salesItems.reduce((s: number, i: any) => s + money(i.quantity), 0);
+    const totalSales = salesItems.reduce((sum, item) => sum + money(item.unit_price) * money(item.quantity), 0);
+    const totalProducerPay = salesItems.reduce((sum, item) => sum + money(item.producer_pay), 0);
+    const totalFund = salesItems.reduce((sum, item) => sum + money(item.community_fund), 0);
+    const totalUnits = salesItems.reduce((sum, item) => sum + money(item.quantity), 0);
+    const verified = (productsRows || []).filter((p: any) => p.status === "verified").length;
 
     const doc = new jsPDF();
-    const pageW = 210;
+    let y = drawStandardHeader(doc, "Reporte del productor", "Ventas, piezas y pago justo", producer.name || "Productor", "Histórico");
+    y = drawStandardMetrics(doc, [
+      { label: "VENTAS", value: reportMoney(totalSales) },
+      { label: "PAGO PRODUCTOR", value: reportMoney(totalProducerPay) },
+      { label: "FONDO", value: reportMoney(totalFund) },
+      { label: "UNIDADES", value: String(totalUnits) },
+    ], y) + 3;
 
-    // Header band
-    doc.setFillColor(45, 45, 42);
-    doc.rect(0, 0, pageW, 30, "F");
-    doc.setFillColor(90, 106, 66);
-    doc.rect(0, 30, pageW, 2, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(17);
-    doc.text("JNATJO MARKET", 14, 13);
-    doc.setFontSize(9);
-    doc.text("Reporte Personalizado del Productor", 14, 22);
-    const genDate = new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
-    doc.text(`Generado: ${genDate}`, pageW - 14, 22, { align: "right" });
-
-    let y = 40;
-    doc.setTextColor(45, 45, 42);
-    doc.setFontSize(14);
-    doc.text(producer?.name || profile.full_name || "Productor", 14, y);
-    y += 6;
+    y = drawStandardSection(doc, "Resumen de piezas", y);
     doc.setFontSize(8);
-    doc.setTextColor(107, 102, 95);
-    if (producer?.community) doc.text(`Comunidad: ${producer.community}`, 14, y);
-    y += 12;
+    doc.setTextColor(...REPORT_DARK);
+    doc.text("Registradas: " + (productsRows || []).length + " · verificadas: " + verified + " · pendientes: " + ((productsRows || []).length - verified), 14, y);
+    y += 10;
 
-    // Summary metrics
-    const boxW = (pageW - 28 - 9) / 4;
-    const metrics = [
-      { label: "VENTAS TOTALES", value: `$${totalSales.toLocaleString("es-MX")}` },
-      { label: "PAGO AL PRODUCTOR", value: `$${totalProducerPay.toLocaleString("es-MX")}` },
-      { label: "FONDO COMUNITARIO", value: `$${totalCommunityFund.toLocaleString("es-MX")}` },
-      { label: "UNIDADES VENDIDAS", value: String(totalUnits) },
-    ];
-    for (let i = 0; i < metrics.length; i++) {
-      const bx = 14 + i * (boxW + 3);
-      doc.setFillColor(250, 248, 245);
-      doc.setDrawColor(230, 226, 218);
-      doc.rect(bx, y, boxW, 22, "FD");
-      doc.setFontSize(6.5);
-      doc.setTextColor(107, 102, 95);
-      doc.text(metrics[i].label, bx + 3, y + 7);
-      doc.setFontSize(11);
-      doc.setTextColor(45, 45, 42);
-      doc.text(metrics[i].value, bx + 3, y + 17);
-    }
-    y += 30;
-
-    // Products section
-    doc.setFontSize(10);
-    doc.setTextColor(45, 45, 42);
-    doc.text("Piezas Registradas", 14, y);
-    y += 4;
-    doc.setFillColor(90, 106, 66);
-    doc.rect(14, y, pageW - 28, 0.5, "F");
-    y += 7;
-    doc.setFontSize(8);
-    doc.setTextColor(107, 102, 95);
-    const totalReg = (productsRows || []).length;
-    const totalVerif = (productsRows || []).filter((p: any) => p.status === "verified").length;
-    doc.text(`Total registradas: ${totalReg}  |  Verificadas: ${totalVerif}  |  Pendientes: ${totalReg - totalVerif}`, 14, y);
-    y += 12;
-
-    // Sales table
-    doc.setFontSize(10);
-    doc.setTextColor(45, 45, 42);
-    doc.text("Detalle de Ventas Confirmadas", 14, y);
-    y += 4;
-    doc.setFillColor(90, 106, 66);
-    doc.rect(14, y, pageW - 28, 0.5, "F");
-    y += 8;
-
-    // Table header row
-    const cols = [14, 34, 62, 130, 152, 175];
-    const headers = ["FECHA", "ORDEN", "PRODUCTO", "CANT.", "PRECIO U.", "PAGO PROD."];
-    doc.setFillColor(239, 237, 231);
-    doc.rect(14, y - 5, pageW - 28, 7, "F");
-    doc.setFontSize(7);
-    doc.setTextColor(107, 102, 95);
-    for (let i = 0; i < headers.length; i++) {
-      doc.text(headers[i], cols[i], y);
-    }
-    y += 5;
-
-    if (salesItems.length === 0) {
+    y = drawStandardSection(doc, "Ventas confirmadas", y);
+    const cols = [14, 38, 78, 132, 157, 184];
+    y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "PRODUCTO", "CANT.", "PRECIO", "PAGO"], cols, y);
+    if (!salesItems.length) {
       doc.setFontSize(8);
-      doc.setTextColor(138, 132, 124);
-      doc.text("No hay ventas confirmadas registradas aun.", 14, y + 6);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No hay ventas confirmadas para mostrar.", 14, y + 6);
     } else {
-      doc.setFontSize(7.5);
       for (const item of salesItems) {
-        if (y > 270) { doc.addPage(); y = 18; }
-        const d = new Date(item.orders?.created_at || "");
-        const dateStr = Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" });
-        doc.setTextColor(107, 102, 95);
-        doc.text(dateStr, cols[0], y);
-        doc.setTextColor(45, 45, 42);
-        doc.text((item.orders?.id || "").slice(0, 8).toUpperCase(), cols[1], y);
-        doc.text((item.product_name || "").slice(0, 34), cols[2], y);
-        doc.text(String(item.quantity), cols[3], y);
-        doc.text(`$${money(item.unit_price).toLocaleString("es-MX")}`, cols[4], y);
-        doc.setTextColor(90, 106, 66);
-        doc.text(`$${money(item.producer_pay).toLocaleString("es-MX")}`, cols[5], y);
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Ventas confirmadas · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "PRODUCTO", "CANT.", "PRECIO", "PAGO"], cols, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(item.orders?.created_at), cols[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(item.orders?.id || "—").slice(0, 8).toUpperCase(), cols[1], y);
+        doc.text(String(item.product_name || "—").slice(0, 28), cols[2], y);
+        doc.text(String(item.quantity || 0), cols[3], y);
+        doc.text(reportMoney(item.unit_price), cols[4], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(reportMoney(item.producer_pay), cols[5], y, { align: "right" });
         y += 7;
-        doc.setDrawColor(230, 226, 218);
-        doc.line(14, y - 2, pageW - 14, y - 2);
       }
     }
-
-    y += 10;
-    doc.setFontSize(7);
-    doc.setTextColor(138, 132, 124);
-    doc.text("Jnatjo Market - Comercio Justo y Trazabilidad Artesanal", 14, y);
+    drawStandardFooter(doc);
 
     const pdf = Buffer.from(doc.output("arraybuffer"));
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline; filename=jnatjo-reporte-productor.pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-productor.pdf");
     res.send(pdf);
   } catch (error) {
     next(error);
@@ -2861,15 +2954,17 @@ app.get("/api/reports/producer.pdf", requireAuth, async (req: AuthedRequest, res
 app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
     const profile = req.profile!;
-    let cooperativeId: string;
+    let cooperativeId = "";
     if (profile.role === "admin") {
       cooperativeId = assertString(req.query.cooperativeId);
-      if (!cooperativeId) return res.status(400).json({ error: "Indica la cooperativa para generar el reporte." });
+      if (!cooperativeId) return res.status(400).json({ error: "Selecciona una cooperativa para generar el reporte." });
     } else if (["cooperative", "verifier", "inventory_manager", "logistics"].includes(profile.role)) {
       cooperativeId = profile.cooperative_id || "";
-      if (!cooperativeId) return res.status(403).json({ error: "Tu cuenta no tiene una cooperativa asignada." });
     } else {
       return res.status(403).json({ error: "No tienes permiso para consultar reportes de cooperativas." });
+    }
+    if (!cooperativeId || !canAccessCooperative(req, cooperativeId)) {
+      return res.status(403).json({ error: "No puedes consultar el reporte de otra cooperativa." });
     }
 
     const { data: coop, error: coopError } = await supabase
@@ -2880,201 +2975,383 @@ app.get("/api/reports/cooperative.pdf", requireAuth, async (req: AuthedRequest, 
     if (coopError) throw coopError;
     if (!coop) return res.status(404).json({ error: "Cooperativa no encontrada." });
 
-    if (profile.role !== "admin" && !canAccessCooperative(req, cooperativeId)) {
-      return res.status(403).json({ error: "No puedes consultar el reporte de otra cooperativa." });
-    }
-
-    const { data: coopProducts, error: coopProductsError } = await supabase
+    const { data: productsRows, error: productError } = await supabase
       .from("products")
       .select("id, name, status, producer_name, producer_id, category")
       .eq("cooperative_id", cooperativeId);
-    if (coopProductsError) throw coopProductsError;
+    if (productError) throw productError;
 
-    const coopProductIds = new Set((coopProducts || []).map((p: any) => p.id));
-
-    const { data: allOrders, error: allOrdersError } = await supabase
-      .from("orders")
-      .select("id, status, customer_name, customer_email, subtotal, producer_total, community_fund_total, platform_commission_total, fulfillment_status, created_at, order_items(product_id, product_name, quantity, unit_price, producer_pay, community_fund)")
-      .in("status", ["paid", "shipped", "delivered"])
-      .order("created_at", { ascending: false });
-    if (allOrdersError) throw allOrdersError;
-
-    const relevantOrders = (allOrders || []).filter((order: any) =>
-      (order.order_items || []).some((item: any) => coopProductIds.has(item.product_id)),
-    );
-
-    const { data: resources, error: resourcesError } = await supabase
-      .from("shared_resources")
-      .select("id")
-      .eq("cooperative_id", cooperativeId);
-    if (resourcesError) throw resourcesError;
-    const resourceIds = (resources || []).map((r: any) => r.id);
-
-    let reservations: any[] = [];
-    if (resourceIds.length > 0) {
-      const { data: reservationRows, error: reservationsError } = await supabase
-        .from("resource_reservations")
-        .select("id, resource_name, user_name, status, start_date, end_date")
-        .in("resource_id", resourceIds)
-        .order("created_at", { ascending: false })
-        .limit(50);
-      if (reservationsError) throw reservationsError;
-      reservations = reservationRows || [];
+    const productIds = (productsRows || []).map((p: any) => p.id);
+    let orders: any[] = [];
+    if (productIds.length) {
+      const { data: orderRows, error } = await supabase
+        .from("orders")
+        .select("id, status, subtotal, producer_total, community_fund_total, platform_commission_total, fulfillment_status, created_at, order_items(product_id)")
+        .in("status", ["paid", "shipped", "delivered"])
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      const ids = new Set(productIds);
+      orders = (orderRows || []).filter((order: any) => (order.order_items || []).some((item: any) => ids.has(item.product_id)));
     }
 
-    const totalOrders = relevantOrders.length;
-    const totalRevenue = relevantOrders.reduce((s: number, o: any) => s + money(o.subtotal), 0);
-    const totalProducerPay = relevantOrders.reduce((s: number, o: any) => s + money(o.producer_total), 0);
-    const totalFund = relevantOrders.reduce((s: number, o: any) => s + money(o.community_fund_total), 0);
-    const totalPlatform = relevantOrders.reduce((s: number, o: any) => s + money(o.platform_commission_total), 0);
-    const totalProducts = (coopProducts || []).length;
-    const verifiedProducts = (coopProducts || []).filter((p: any) => p.status === "verified").length;
+    const revenue = orders.reduce((sum, row) => sum + money(row.subtotal), 0);
+    const producerPay = orders.reduce((sum, row) => sum + money(row.producer_total), 0);
+    const fund = orders.reduce((sum, row) => sum + money(row.community_fund_total), 0);
+    const commission = orders.reduce((sum, row) => sum + money(row.platform_commission_total), 0);
+    const verified = (productsRows || []).filter((row: any) => row.status === "verified").length;
+
+    const { data: resourceRows, error: resourceError } = await supabase
+      .from("shared_resources")
+      .select("id, name, quantity, unit, low_stock_threshold")
+      .eq("cooperative_id", cooperativeId);
+    if (resourceError) throw resourceError;
+
+    const resources = resourceRows || [];
+    const lowStock = resources.filter((row: any) => money(row.quantity) <= money(row.low_stock_threshold)).length;
 
     const doc = new jsPDF();
-    const pageW = 210;
+    let y = drawStandardHeader(
+      doc,
+      "Reporte de la cooperativa",
+      "Operación, ventas y recursos comunitarios",
+      coop.name + (coop.community ? " · " + coop.community : ""),
+      "Histórico",
+    );
+    y = drawStandardMetrics(doc, [
+      { label: "ORDENES", value: String(orders.length) },
+      { label: "INGRESOS", value: reportMoney(revenue) },
+      { label: "PAGO PRODUCTORES", value: reportMoney(producerPay) },
+      { label: "FONDO", value: reportMoney(fund) },
+    ], y) + 3;
 
-    // Header band
-    doc.setFillColor(45, 45, 42);
-    doc.rect(0, 0, pageW, 30, "F");
-    doc.setFillColor(194, 132, 93);
-    doc.rect(0, 30, pageW, 2, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(17);
-    doc.text("JNATJO MARKET", 14, 13);
-    doc.setFontSize(9);
-    doc.text("Reporte de Cooperativa", 14, 22);
-    const genDate2 = new Date().toLocaleDateString("es-MX", { day: "2-digit", month: "long", year: "numeric" });
-    doc.text(`Generado: ${genDate2}`, pageW - 14, 22, { align: "right" });
-
-    let y = 40;
-    doc.setTextColor(45, 45, 42);
-    doc.setFontSize(14);
-    doc.text(coop?.name || "Cooperativa", 14, y);
-    y += 6;
+    y = drawStandardSection(doc, "Indicadores operativos", y);
     doc.setFontSize(8);
-    doc.setTextColor(107, 102, 95);
-    const coopMeta = [coop?.municipality, coop?.community, coop?.representative ? `Representante: ${coop.representative}` : ""].filter(Boolean).join("  |  ");
-    if (coopMeta) doc.text(coopMeta, 14, y);
-    y += 12;
-
-    // Summary metrics (2 rows of 3)
-    const mBoxW = (pageW - 28 - 6) / 3;
-    const mMetrics = [
-      { label: "ORDENES GESTIONADAS", value: String(totalOrders) },
-      { label: "INGRESOS TOTALES", value: `$${totalRevenue.toLocaleString("es-MX")}` },
-      { label: "PAGOS A PRODUCTORES", value: `$${totalProducerPay.toLocaleString("es-MX")}` },
-      { label: "FONDO COMUNITARIO", value: `$${totalFund.toLocaleString("es-MX")}` },
-      { label: "COMISION PLATAFORMA", value: `$${totalPlatform.toLocaleString("es-MX")}` },
-      { label: "PRODUCTOS REGISTRADOS", value: `${verifiedProducts}/${totalProducts} verif.` },
-    ];
-    for (let i = 0; i < mMetrics.length; i++) {
-      const row = Math.floor(i / 3);
-      const col = i % 3;
-      const bx = 14 + col * (mBoxW + 3);
-      const by = y + row * 26;
-      doc.setFillColor(250, 248, 245);
-      doc.setDrawColor(230, 226, 218);
-      doc.rect(bx, by, mBoxW, 22, "FD");
-      doc.setFontSize(6.5);
-      doc.setTextColor(107, 102, 95);
-      doc.text(mMetrics[i].label, bx + 3, by + 7);
-      doc.setFontSize(11);
-      doc.setTextColor(45, 45, 42);
-      doc.text(mMetrics[i].value, bx + 3, by + 17);
-    }
-    y += 58;
-
-    // Orders table
-    doc.setFontSize(10);
-    doc.setTextColor(45, 45, 42);
-    doc.text("Historial de Ordenes", 14, y);
-    y += 4;
-    doc.setFillColor(194, 132, 93);
-    doc.rect(14, y, pageW - 28, 0.5, "F");
-    y += 8;
-
-    const oCols = [14, 34, 82, 132, 162, 186];
-    const oHeaders = ["FECHA", "ORDEN", "CLIENTE", "TOTAL", "PROD. PAGO", "ESTADO"];
-    doc.setFillColor(239, 237, 231);
-    doc.rect(14, y - 5, pageW - 28, 7, "F");
-    doc.setFontSize(7);
-    doc.setTextColor(107, 102, 95);
-    for (let i = 0; i < oHeaders.length; i++) doc.text(oHeaders[i], oCols[i], y);
-    y += 5;
-
-    if (relevantOrders.length === 0) {
-      doc.setFontSize(8);
-      doc.setTextColor(138, 132, 124);
-      doc.text("No hay ordenes gestionadas registradas aun.", 14, y + 6);
-    } else {
-      doc.setFontSize(7);
-      for (const order of relevantOrders) {
-        if (y > 270) { doc.addPage(); y = 18; }
-        const d = new Date(order.created_at || "");
-        const dateStr = Number.isNaN(d.getTime()) ? "-" : d.toLocaleDateString("es-MX", { day: "2-digit", month: "short" });
-        const customer = (order.customer_name || order.customer_email || "").slice(0, 22);
-        doc.setTextColor(107, 102, 95);
-        doc.text(dateStr, oCols[0], y);
-        doc.setTextColor(45, 45, 42);
-        doc.text(order.id.slice(0, 8).toUpperCase(), oCols[1], y);
-        doc.text(customer, oCols[2], y);
-        doc.text(`$${money(order.subtotal).toLocaleString("es-MX")}`, oCols[3], y);
-        doc.setTextColor(90, 106, 66);
-        doc.text(`$${money(order.producer_total).toLocaleString("es-MX")}`, oCols[4], y);
-        doc.setTextColor(45, 45, 42);
-        doc.text(String(order.fulfillment_status || order.status || "-").slice(0, 10), oCols[5], y);
-        y += 7;
-        doc.setDrawColor(230, 226, 218);
-        doc.line(14, y - 2, pageW - 14, y - 2);
-      }
-    }
-
-    // Reservations section
-    if (y < 240 && (reservations || []).length > 0) {
-      y += 8;
-      doc.setFontSize(10);
-      doc.setTextColor(45, 45, 42);
-      doc.text("Reservas de Maquinaria y Recursos", 14, y);
-      y += 4;
-      doc.setFillColor(194, 132, 93);
-      doc.rect(14, y, pageW - 28, 0.5, "F");
-      y += 8;
-
-      const rCols = [14, 72, 116, 152, 178];
-      const rHeaders = ["RECURSO", "SOLICITANTE", "INICIO", "FIN", "ESTADO"];
-      doc.setFillColor(239, 237, 231);
-      doc.rect(14, y - 5, pageW - 28, 7, "F");
-      doc.setFontSize(7);
-      doc.setTextColor(107, 102, 95);
-      for (let i = 0; i < rHeaders.length; i++) doc.text(rHeaders[i], rCols[i], y);
-      y += 5;
-
-      doc.setFontSize(7);
-      for (const rsv of reservations || []) {
-        if (y > 275) break;
-        const ds = new Date(rsv.start_date).toLocaleDateString("es-MX", { day: "2-digit", month: "short" });
-        const de = new Date(rsv.end_date).toLocaleDateString("es-MX", { day: "2-digit", month: "short" });
-        doc.setTextColor(45, 45, 42);
-        doc.text((rsv.resource_name || "").slice(0, 26), rCols[0], y);
-        doc.text((rsv.user_name || "").slice(0, 20), rCols[1], y);
-        doc.text(ds, rCols[2], y);
-        doc.text(de, rCols[3], y);
-        doc.setTextColor(rsv.status === "approved" ? 90 : rsv.status === "cancelled" ? 164 : 45, rsv.status === "approved" ? 106 : 45, rsv.status === "approved" ? 66 : 42);
-        doc.text(String(rsv.status || "-"), rCols[4], y);
-        y += 6;
-        doc.setDrawColor(230, 226, 218);
-        doc.line(14, y - 1.5, pageW - 14, y - 1.5);
-      }
-    }
-
+    doc.setTextColor(...REPORT_DARK);
+    doc.text(
+      "Productos: " + (productsRows || []).length +
+      " · verificados: " + verified +
+      " · recursos: " + resources.length +
+      " · stock bajo: " + lowStock +
+      " · comisión: " + reportMoney(commission),
+      14, y,
+    );
     y += 10;
-    doc.setFontSize(7);
-    doc.setTextColor(138, 132, 124);
-    doc.text("Jnatjo Market - Comercio Justo y Trazabilidad Artesanal", 14, y);
 
+    y = drawStandardSection(doc, "Ordenes gestionadas", y);
+    const cols = [14, 40, 88, 126, 160, 186];
+    y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "TOTAL", "P. PROD.", "FONDO"], cols, y);
+    if (!orders.length) {
+      doc.setFontSize(8);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No hay ordenes confirmadas para mostrar.", 14, y + 6);
+    } else {
+      for (const order of orders) {
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Ordenes gestionadas · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "TOTAL", "P. PROD.", "FONDO"], cols, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(order.created_at), cols[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(order.id).slice(0, 8).toUpperCase(), cols[1], y);
+        doc.text(String(order.fulfillment_status || order.status || "—").slice(0, 12), cols[2], y);
+        doc.text(reportMoney(order.subtotal), cols[3], y);
+        doc.text(reportMoney(order.producer_total), cols[4], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(reportMoney(order.community_fund_total), cols[5], y, { align: "right" });
+        y += 7;
+      }
+    }
+
+    y = drawStandardSection(doc, "Inventario comunitario", y + 3);
+    const rCols = [14, 100, 148, 184];
+    y = drawStandardTableHeader(doc, ["RECURSO", "CANTIDAD", "UNIDAD", "ALERTA"], rCols, y);
+    for (const row of resources) {
+      if (y > 270) {
+        doc.addPage();
+        y = drawStandardSection(doc, "Inventario comunitario · continuación", 20);
+        y = drawStandardTableHeader(doc, ["RECURSO", "CANTIDAD", "UNIDAD", "ALERTA"], rCols, y);
+      }
+      doc.setFontSize(7);
+      doc.setTextColor(...REPORT_DARK);
+      doc.text(String(row.name || "—").slice(0, 34), rCols[0], y);
+      doc.text(String(row.quantity ?? 0), rCols[1], y);
+      doc.text(String(row.unit || "—").slice(0, 12), rCols[2], y);
+      doc.text(money(row.quantity) <= money(row.low_stock_threshold) ? "STOCK BAJO" : "Normal", rCols[3], y);
+      y += 7;
+    }
+
+    drawStandardFooter(doc);
     const pdf = Buffer.from(doc.output("arraybuffer"));
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline; filename=jnatjo-reporte-cooperativa.pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-cooperativa.pdf");
+    res.send(pdf);
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+app.get("/api/reports/customer.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    if (req.profile!.role !== "customer") return res.status(403).json({ error: "Este reporte está disponible para clientes." });
+
+    const { data: orders, error } = await supabase
+      .from("orders")
+      .select("id, status, subtotal, fulfillment_status, created_at, reward_points, reward_points_redeemed, order_items(product_name, quantity, unit_price)")
+      .eq("customer_id", req.user!.id)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+
+    const rows = orders || [];
+    const confirmed = rows.filter((row: any) => ["paid", "shipped", "delivered"].includes(row.status));
+    const spent = confirmed.reduce((sum, row) => sum + money(row.subtotal), 0);
+    const delivered = rows.filter((row: any) => row.fulfillment_status === "delivered" || row.status === "delivered").length;
+    const points = rows.reduce((sum, row) => sum + money(row.reward_points), 0);
+
+    const doc = new jsPDF();
+    let y = drawStandardHeader(doc, "Reporte de compras", "Historial de pedidos y recompensas", req.profile!.full_name, "Histórico");
+    y = drawStandardMetrics(doc, [
+      { label: "ORDENES", value: String(rows.length) },
+      { label: "COMPRAS", value: reportMoney(spent) },
+      { label: "ENTREGADAS", value: String(delivered) },
+      { label: "PUNTOS", value: String(points) },
+    ], y) + 3;
+
+    y = drawStandardSection(doc, "Historial de compras", y);
+    const cols = [14, 42, 96, 138, 186];
+    y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "ENTREGA", "TOTAL"], cols, y);
+
+    if (!rows.length) {
+      doc.setFontSize(8);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No hay compras registradas.", 14, y + 6);
+    } else {
+      for (const row of rows) {
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Historial de compras · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "ENTREGA", "TOTAL"], cols, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(row.created_at), cols[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(row.id).slice(0, 8).toUpperCase(), cols[1], y);
+        doc.text(String(row.status || "—").slice(0, 12), cols[2], y);
+        doc.text(String(row.fulfillment_status || "—").slice(0, 12), cols[3], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(reportMoney(row.subtotal), cols[4], y, { align: "right" });
+        y += 7;
+      }
+    }
+
+    y = drawStandardSection(doc, "Detalle de artículos", y + 3);
+    doc.setFontSize(8);
+    doc.setTextColor(...REPORT_DARK);
+    const itemCount = rows.reduce((sum, row: any) => sum + (row.order_items || []).reduce((itemSum: number, item: any) => itemSum + Number(item.quantity || 0), 0), 0);
+    doc.text("Unidades adquiridas: " + itemCount + " · puntos generados: " + points, 14, y);
+
+    drawStandardFooter(doc);
+    const pdf = Buffer.from(doc.output("arraybuffer"));
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-compras.pdf");
+    res.send(pdf);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/reports/inventory.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    const role = req.profile!.role;
+    const allowed = ["producer", "cooperative", "inventory_manager", "logistics", "verifier", "admin"];
+    if (!allowed.includes(role)) return res.status(403).json({ error: "No tienes permiso para consultar el reporte de inventario." });
+
+    let resourceQuery = supabase
+      .from("shared_resources")
+      .select("id, name, type, quantity, unit, status, low_stock_threshold, cooperative_id, available_shared")
+      .order("name");
+    if (role !== "admin" && role !== "producer") {
+      resourceQuery = resourceQuery.eq("cooperative_id", req.profile!.cooperative_id || "__none__");
+    }
+    if (role === "producer") {
+      resourceQuery = resourceQuery.eq("available_shared", true).eq("status", "available");
+    }
+
+    const { data: resources, error: resourceError } = await resourceQuery;
+    if (resourceError) throw resourceError;
+
+    const rows = resources || [];
+    const lowStock = rows.filter((row: any) => money(row.quantity) <= money(row.low_stock_threshold)).length;
+    let movements: any[] = [];
+    if (role !== "producer") {
+      const ids = rows.map((row: any) => row.id);
+      if (ids.length) {
+        const { data, error } = await supabase
+          .from("resource_movements")
+          .select("resource_id, type, quantity, notes, created_at")
+          .in("resource_id", ids)
+          .order("created_at", { ascending: false })
+          .limit(100);
+        if (error) throw error;
+        movements = data || [];
+      }
+    }
+
+    const doc = new jsPDF();
+    const subject =
+      role === "admin"
+        ? "Inventario comunitario consolidado de la plataforma."
+        : role === "producer"
+          ? "Recursos compartidos disponibles para la operación del productor."
+          : "Inventario y movimientos del ámbito operativo asignado.";
+    let y = drawStandardHeader(doc, "Reporte de inventario comunitario", "Existencias, disponibilidad y movimientos", subject, "Corte actual");
+    y = drawStandardMetrics(doc, [
+      { label: "RECURSOS", value: String(rows.length) },
+      { label: "STOCK BAJO", value: String(lowStock) },
+      { label: "MOVIMIENTOS", value: String(movements.length) },
+      { label: "ÁMBITO", value: role === "admin" ? "GLOBAL" : "OPERATIVO" },
+    ], y) + 3;
+
+    y = drawStandardSection(doc, "Existencias actuales", y);
+    const cols = [14, 78, 122, 152, 186];
+    y = drawStandardTableHeader(doc, ["RECURSO", "TIPO", "CANT.", "UNIDAD", "ESTADO"], cols, y);
+
+    if (!rows.length) {
+      doc.setFontSize(8);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No hay recursos disponibles para este ámbito.", 14, y + 6);
+    } else {
+      for (const row of rows) {
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Existencias actuales · continuación", 20);
+          y = drawStandardTableHeader(doc, ["RECURSO", "TIPO", "CANT.", "UNIDAD", "ESTADO"], cols, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(row.name || "—").slice(0, 34), cols[0], y);
+        doc.text(String(row.type || "—").slice(0, 14), cols[1], y);
+        doc.text(String(row.quantity ?? 0), cols[2], y);
+        doc.text(String(row.unit || "—").slice(0, 12), cols[3], y);
+        doc.text(money(row.quantity) <= money(row.low_stock_threshold) ? "STOCK BAJO" : String(row.status || "—").slice(0, 10), cols[4], y);
+        y += 7;
+      }
+    }
+
+    if (movements.length) {
+      y = drawStandardSection(doc, "Movimientos recientes", y + 3);
+      const mCols = [14, 74, 116, 150, 186];
+      y = drawStandardTableHeader(doc, ["FECHA", "RECURSO", "CANT.", "NOTAS", "SIGNO"], mCols, y);
+      const names = new Map(rows.map((row: any) => [row.id, row.name]));
+      for (const row of movements) {
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Movimientos recientes · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "RECURSO", "CANT.", "NOTAS", "SIGNO"], mCols, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(row.created_at), mCols[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(names.get(row.resource_id) || "—").slice(0, 26), mCols[1], y);
+        doc.text(String(row.quantity || 0), mCols[2], y);
+        doc.text(String(row.notes || "—").slice(0, 22), mCols[3], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(["in", "return"].includes(row.type) ? "+" : "-", mCols[4], y);
+        y += 7;
+      }
+    }
+
+    drawStandardFooter(doc);
+    const pdf = Buffer.from(doc.output("arraybuffer"));
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-inventario.pdf");
+    res.send(pdf);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/reports/admin.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
+  try {
+    if (req.profile!.role !== "admin") return res.status(403).json({ error: "Este reporte está disponible para administración." });
+
+    const [profilesResult, coopResult, productsResult, ordersResult] = await Promise.all([
+      supabase.from("profiles").select("id, role, created_at"),
+      supabase.from("cooperatives").select("id, name, municipality, community"),
+      supabase.from("products").select("id, status, price"),
+      supabase.from("orders").select("id, status, subtotal, producer_total, community_fund_total, created_at").order("created_at", { ascending: false }).limit(50),
+    ]);
+    if (profilesResult.error) throw profilesResult.error;
+    if (coopResult.error) throw coopResult.error;
+    if (productsResult.error) throw productsResult.error;
+    if (ordersResult.error) throw ordersResult.error;
+
+    const profilesRows = profilesResult.data || [];
+    const coopRows = coopResult.data || [];
+    const productRows = productsResult.data || [];
+    const orderRows = ordersResult.data || [];
+    const confirmed = orderRows.filter((row: any) => ["paid", "shipped", "delivered"].includes(row.status));
+    const revenue = confirmed.reduce((sum, row) => sum + money(row.subtotal), 0);
+    const producerPay = confirmed.reduce((sum, row) => sum + money(row.producer_total), 0);
+    const fund = confirmed.reduce((sum, row) => sum + money(row.community_fund_total), 0);
+
+    const doc = new jsPDF();
+    let y = drawStandardHeader(doc, "Reporte administrativo del sistema", "Usuarios, operación y catálogo", "Resumen global para administración de Jnatjo Market.", "Corte actual");
+    y = drawStandardMetrics(doc, [
+      { label: "USUARIOS", value: String(profilesRows.length) },
+      { label: "COOPERATIVAS", value: String(coopRows.length) },
+      { label: "PRODUCTOS", value: String(productRows.length) },
+      { label: "ORDENES", value: String(orderRows.length) },
+    ], y) + 3;
+
+    y = drawStandardSection(doc, "Indicadores financieros", y);
+    doc.setFontSize(8);
+    doc.setTextColor(...REPORT_DARK);
+    doc.text("Ingresos confirmados: " + reportMoney(revenue) + " · pago a productores: " + reportMoney(producerPay) + " · fondo: " + reportMoney(fund), 14, y);
+    y += 10;
+
+    y = drawStandardSection(doc, "Distribución de usuarios", y);
+    const roles = ["customer", "producer", "cooperative", "verifier", "inventory_manager", "logistics", "admin"];
+    const roleCounts = roles.map(role => [role, profilesRows.filter((row: any) => row.role === role).length]);
+    y = drawStandardTableHeader(doc, ["ROL", "USUARIOS"], [14, 110], y);
+    for (const row of roleCounts) {
+      doc.setFontSize(8);
+      doc.setTextColor(...REPORT_DARK);
+      doc.text(String(row[0]), 14, y);
+      doc.text(String(row[1]), 110, y);
+      y += 7;
+    }
+
+    y = drawStandardSection(doc, "Ordenes recientes", y + 3);
+    const cols = [14, 44, 100, 140, 184];
+    y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "TOTAL", "FONDO"], cols, y);
+    for (const row of orderRows) {
+      if (y > 270) {
+        doc.addPage();
+        y = drawStandardSection(doc, "Ordenes recientes · continuación", 20);
+        y = drawStandardTableHeader(doc, ["FECHA", "ORDEN", "ESTADO", "TOTAL", "FONDO"], cols, y);
+      }
+      doc.setFontSize(7);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text(reportDate(row.created_at), cols[0], y);
+      doc.setTextColor(...REPORT_DARK);
+      doc.text(String(row.id).slice(0, 8).toUpperCase(), cols[1], y);
+      doc.text(String(row.status || "—").slice(0, 12), cols[2], y);
+      doc.text(reportMoney(row.subtotal), cols[3], y);
+      doc.setTextColor(...REPORT_GREEN);
+      doc.text(reportMoney(row.community_fund_total), cols[4], y, { align: "right" });
+      y += 7;
+    }
+
+    drawStandardFooter(doc);
+    const pdf = Buffer.from(doc.output("arraybuffer"));
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-administrativo.pdf");
     res.send(pdf);
   } catch (error) {
     next(error);

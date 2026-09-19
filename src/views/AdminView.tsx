@@ -1,6 +1,7 @@
 import React, { FormEvent } from "react";
 import { Building2, Gauge, Lock, Package, ShieldCheck, Trash2, Users } from "lucide-react";
 import { Cooperative, Order, Product, Profile } from "../types";
+import ReportCard from "../components/ReportCard";
 
 interface AdminViewProps {
   profile: Profile | null;
@@ -15,6 +16,7 @@ interface AdminViewProps {
   onDeleteProduct: (product: Product) => void;
   onDeleteProfile: (profile: Profile) => void;
   onDeleteCooperative: (cooperative: Cooperative) => void;
+  onDownloadReport: () => void;
 }
 
 export default function AdminView({
@@ -30,11 +32,20 @@ export default function AdminView({
   onDeleteProduct,
   onDeleteProfile,
   onDeleteCooperative,
+  onDownloadReport,
 }: AdminViewProps) {
   const isAdmin = Boolean(profile && profile.role === "admin");
 
   return (
     <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+      <div className="xl:col-span-2">
+        <ReportCard
+          title="Reporte administrativo del sistema"
+          description="PDF estandarizado con usuarios, cooperativas, catálogo, órdenes e indicadores financieros."
+          buttonLabel="Generar y descargar PDF"
+          onDownload={onDownloadReport}
+        />
+      </div>
       <div className="rounded-2xl border border-[#E6E2DA] bg-white p-5 shadow-xs space-y-5">
         <div>
           <h2 className="mb-2 text-lg font-serif font-bold text-[#2D2D2A]">Auditoría de Órdenes de Compra</h2>

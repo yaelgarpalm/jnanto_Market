@@ -948,28 +948,6 @@ export default function App() {
     setAnchors(trace.anchors);
   }
 
-  async function downloadAuthenticatedPdf(path: string, filename: string) {
-    try {
-      const response = await fetch(path, { headers: await authHeaders() });
-      if (!response.ok) throw new Error("No se pudo descargar el reporte.");
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      setAuthMessage(getFriendlyError(error, "No se pudo descargar el reporte."));
-    }
-  }
-
-  async function downloadFundReport() {
-    await downloadAuthenticatedPdf("/api/reports/community-fund.pdf", "reporte-fondo-comunitario.pdf");
-  }
-
   async function downloadProductQr(product: Product, orderId?: string) {
     const response = await fetch(`/api/products/${product.id}/qr.png`);
     if (!response.ok) {
@@ -994,42 +972,84 @@ export default function App() {
     setAuthMessage("QR descargado como imagen PNG.");
   }
 
-  async function downloadProducerReport() {
-    const headers = await authHeaders();
-    const response = await fetch("/api/reports/producer.pdf", { headers });
-    if (!response.ok) {
-      setAuthMessage("No se pudo generar el reporte del productor.");
-      return;
+  async function downloadAuthenticatedPdf(path: string, filename: string, successMessage: string) {
+    try {
+      const response = await fetch(path, { headers: await authHeaders() });
+      const contentType = response.headers.get("content-type") || "";
+      if (!response.ok) {
+        let detail = "";
+        try {
+          const body = contentType.includes("application/json") ? await response.json() : await response.text();
+          detail = typeof body === "string" ? body : body.error || "";
+        } catch {
+          detail = "";
+        }
+        throw new Error(detail || ("No se pudo generar el reporte (" + response.status + ")."));
+      }
+      if (!contentType.includes("application/pdf")) {
+        throw new Error("El servidor no devolvió un PDF válido.");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setAuthMessage(successMessage);
+    } catch (error) {
+      setAuthMessage(getFriendlyError(error, "No se pudo generar el reporte."));
     }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "jnatjo-reporte-productor.pdf";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    setAuthMessage("Reporte del productor descargado en PDF.");
+  }
+
+  async function downloadFundReport() {
+    await downloadAuthenticatedPdf(
+      "/api/reports/community-fund.pdf",
+      "jnatjo-reporte-fondo-comunitario.pdf",
+      "Reporte del fondo comunitario descargado correctamente.",
+    );
+  }
+
+  async function downloadProducerReport() {
+    await downloadAuthenticatedPdf(
+      "/api/reports/producer.pdf",
+      "jnatjo-reporte-productor.pdf",
+      "Reporte del productor descargado correctamente.",
+    );
   }
 
   async function downloadCoopReport() {
-    const headers = await authHeaders();
-    const response = await fetch("/api/reports/cooperative.pdf", { headers });
-    if (!response.ok) {
-      setAuthMessage("No se pudo generar el reporte de la cooperativa.");
-      return;
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "jnatjo-reporte-cooperativa.pdf";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    setAuthMessage("Reporte de cooperativa descargado en PDF.");
+    await downloadAuthenticatedPdf(
+      "/api/reports/cooperative.pdf",
+      "jnatjo-reporte-cooperativa.pdf",
+      "Reporte de cooperativa descargado correctamente.",
+    );
+  }
+
+  async function downloadCustomerReport() {
+    await downloadAuthenticatedPdf(
+      "/api/reports/customer.pdf",
+      "jnatjo-reporte-compras.pdf",
+      "Reporte de compras descargado correctamente.",
+    );
+  }
+
+  async function downloadInventoryReport() {
+    await downloadAuthenticatedPdf(
+      "/api/reports/inventory.pdf",
+      "jnatjo-reporte-inventario.pdf",
+      "Reporte de inventario descargado correctamente.",
+    );
+  }
+
+  async function downloadAdminReport() {
+    await downloadAuthenticatedPdf(
+      "/api/reports/admin.pdf",
+      "jnatjo-reporte-administrativo.pdf",
+      "Reporte administrativo descargado correctamente.",
+    );
   }
 
   async function createProduct(event: FormEvent) {
@@ -1478,6 +1498,7 @@ export default function App() {
               orders={purchaseOrders}
               products={products}
               onTrace={openTrace}
+              onDownloadReport={downloadCustomerReport}
             />
           )}
 
@@ -1536,6 +1557,7 @@ export default function App() {
               onReserve={reserveResource}
               onCreateResource={createResource}
               onRegisterMovement={registerMovement}
+              onDownloadReport={downloadInventoryReport}
             />
           )}
 
@@ -1564,6 +1586,7 @@ export default function App() {
               onDeleteProduct={deleteAdminProduct}
               onDeleteProfile={deleteAdminProfile}
               onDeleteCooperative={deleteAdminCooperative}
+              onDownloadReport={downloadAdminReport}
             />
           )}
         </section>
