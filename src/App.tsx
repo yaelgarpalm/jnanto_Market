@@ -217,8 +217,10 @@ export default function App() {
   const activeUserKey = session?.user.id || "guest";
   const cartStorageKey = `jnatjo-cart:${activeUserKey}`;
   const shippingStorageKey = `jnatjo-shipping:${activeUserKey}`;
-  const notificationStorageKey = `jnatjo-notifications:${activeUserKey}`;
   const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
+  const notificationTimersRef = useRef<Map<string, number>>(new Map());
+  const notificationSeenRef = useRef<Set<string>>(new Set());
+  const notificationActionLocksRef = useRef<Set<string>>(new Set());
 
   const [sensorForm, setSensorForm] = useState({
     productId: "",
@@ -487,6 +489,15 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
+    if (!session) return;
+    const timer = window.setInterval(() => {
+      loadPrivateData();
+      if (!publicTraceCode) loadPublicData(true).catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [session?.user.id, publicTraceCode]);
+
+  useEffect(() => {
     setCartHydrated(false);
     try {
       const savedCart = localStorage.getItem(cartStorageKey);
@@ -514,20 +525,50 @@ export default function App() {
   }, [cart, cartHydrated, cartStorageKey]);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(notificationStorageKey);
-      setDismissedNotificationIds(saved ? JSON.parse(saved) : []);
-    } catch {
-      setDismissedNotificationIds([]);
+    setDismissedNotificationIds([]);
+    notificationTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    notificationTimersRef.current.clear();
+    notificationSeenRef.current.clear();
+  }, [session?.user.id]);
+
+  useEffect(() => {
+    notificationItems.forEach((item) => {
+      if (notificationTimersRef.current.has(item.id)) return;
+      const timer = window.setTimeout(() => {
+        dismissNotification(item.id);
+        notificationTimersRef.current.delete(item.id);
+      }, 30000);
+      notificationTimersRef.current.set(item.id, timer);
+    });
+  }, [notificationItems]);
+
+  useEffect(() => {
+    if (notificationSeenRef.current.size === 0) {
+      notificationItems.forEach((item) => notificationSeenRef.current.add(item.id));
+      return;
     }
-  }, [notificationStorageKey]);
+    const fresh = notificationItems.filter((item) => !notificationSeenRef.current.has(item.id));
+    fresh.forEach((item) => notificationSeenRef.current.add(item.id));
+    if (fresh.length > 0) setAuthMessage(fresh[0].title + ": " + fresh[0].body);
+  }, [notificationItems]);
 
   function dismissNotification(id: string) {
-    setDismissedNotificationIds((current) => {
-      const next = Array.from(new Set([...current, id]));
-      localStorage.setItem(notificationStorageKey, JSON.stringify(next));
-      return next;
-    });
+    const timer = notificationTimersRef.current.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      notificationTimersRef.current.delete(id);
+    }
+    setDismissedNotificationIds((current) => Array.from(new Set([...current, id])));
+  }
+
+  async function runLockedAction<T>(key: string, task: () => Promise<T>): Promise<T | undefined> {
+    if (notificationActionLocksRef.current.has(key)) return undefined;
+    notificationActionLocksRef.current.add(key);
+    try {
+      return await task();
+    } finally {
+      notificationActionLocksRef.current.delete(key);
+    }
   }
 
   useEffect(() => {
