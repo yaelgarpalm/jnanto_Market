@@ -995,60 +995,41 @@ export default function App() {
   }
 
   async function downloadProducerReport() {
-    try {
-      await downloadAuthenticatedPdf(
-        "/api/reports/producer.pdf",
-        "jnatjo-reporte-productor.pdf",
-        "Reporte del productor descargado correctamente.",
-      );
-    } catch (error) {
-      setAuthMessage(getFriendlyError(error, "No se pudo generar el reporte del productor."));
+    const headers = await authHeaders();
+    const response = await fetch("/api/reports/producer.pdf", { headers });
+    if (!response.ok) {
+      setAuthMessage("No se pudo generar el reporte del productor.");
+      return;
     }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "jnatjo-reporte-productor.pdf";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setAuthMessage("Reporte del productor descargado en PDF.");
   }
 
   async function downloadCoopReport() {
-    try {
-      await downloadAuthenticatedPdf(
-        "/api/reports/cooperative.pdf",
-        "jnatjo-reporte-cooperativa.pdf",
-        "Reporte de cooperativa descargado correctamente.",
-      );
-    } catch (error) {
-      setAuthMessage(getFriendlyError(error, "No se pudo generar el reporte de la cooperativa."));
-    }
-  }
-
-  async function downloadAuthenticatedPdf(
-    path: string,
-    filename: string,
-    successMessage = "Reporte descargado correctamente.",
-  ) {
-    const response = await fetch(path, { headers: await authHeaders() });
-    const contentType = response.headers.get("content-type") || "";
+    const headers = await authHeaders();
+    const response = await fetch("/api/reports/cooperative.pdf", { headers });
     if (!response.ok) {
-      let detail = "";
-      try {
-        const body = contentType.includes("application/json") ? await response.json() : await response.text();
-        detail = typeof body === "string" ? body : body.error || "";
-      } catch {
-        detail = "";
-      }
-      throw new Error(detail || ("No se pudo generar el reporte (" + response.status + ")."));
+      setAuthMessage("No se pudo generar el reporte de la cooperativa.");
+      return;
     }
-    if (!contentType.includes("application/pdf")) {
-      throw new Error("El servidor no devolvió un PDF válido.");
-    }
-
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "jnatjo-reporte-cooperativa.pdf";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
     URL.revokeObjectURL(url);
-    setAuthMessage(successMessage);
+    setAuthMessage("Reporte de cooperativa descargado en PDF.");
   }
 
   async function createProduct(event: FormEvent) {
