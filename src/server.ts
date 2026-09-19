@@ -2767,35 +2767,79 @@ app.post("/api/settlements/:id/pay", requireAuth, requireRoles(["cooperative", "
 
 app.get("/api/reports/community-fund.pdf", requireAuth, async (req: AuthedRequest, res, next) => {
   try {
+    const profile = req.profile!;
     let query = supabase
       .from("community_fund_movements")
       .select("id, type, amount, description, responsible, cooperative_id, approval_status, created_at")
       .order("created_at", { ascending: false });
-    if (req.profile!.role !== "admin") {
-      query = query.eq("cooperative_id", req.profile!.cooperative_id || "__none__");
+
+    if (profile.role !== "admin") {
+      if (!profile.cooperative_id) return res.status(403).json({ error: "Tu cuenta no tiene una cooperativa asignada." });
+      query = query.eq("cooperative_id", profile.cooperative_id);
     }
-    const { data, error: fundError } = await query;
-    if (fundError) throw fundError;
+
+    const { data: movements, error } = await query;
+    if (error) throw error;
+
+    const rows = movements || [];
+    const income = rows.filter((row: any) => row.type === "income").reduce((sum, row) => sum + money(row.amount), 0);
+    const expense = rows.filter((row: any) => row.type !== "income").reduce((sum, row) => sum + money(row.amount), 0);
+    const approved = rows.filter((row: any) => row.approval_status === "approved").length;
+    const pending = rows.length - approved;
+
     const doc = new jsPDF();
-    doc.setFontSize(18);
-    doc.text("Jnatjo Market - Reporte de Fondo Comunitario", 14, 18);
-    doc.setFontSize(10);
-    let y = 30;
-    let balance = 0;
-    for (const item of data || []) {
-      balance += item.type === "income" ? money(item.amount) : -money(item.amount);
-      doc.text(`${item.type.toUpperCase()} $${item.amount} MXN - ${item.description}`.slice(0, 100), 14, y);
-      y += 8;
-      if (y > 280) {
-        doc.addPage();
-        y = 18;
+    let y = drawStandardHeader(
+      doc,
+      "Reporte financiero del fondo comunitario",
+      "Control financiero y transparencia",
+      profile.role === "admin" ? "Fondo comunitario consolidado de la plataforma." : "Fondo comunitario del ámbito operativo asignado.",
+      "Histórico",
+    );
+    y = drawStandardMetrics(doc, [
+      { label: "INGRESOS", value: reportMoney(income) },
+      { label: "EGRESOS", value: reportMoney(expense) },
+      { label: "BALANCE", value: reportMoney(income - expense) },
+      { label: "MOVIMIENTOS", value: String(rows.length) },
+    ], y) + 3;
+
+    y = drawStandardSection(doc, "Detalle de movimientos", y);
+    const columns = [14, 36, 70, 118, 156, 184];
+    y = drawStandardTableHeader(doc, ["FECHA", "TIPO", "DESCRIPCIÓN", "RESPONSABLE", "ESTADO", "MONTO"], columns, y);
+
+    if (!rows.length) {
+      doc.setFontSize(8);
+      doc.setTextColor(...REPORT_MUTED);
+      doc.text("No existen movimientos registrados para este ámbito.", 14, y + 6);
+    } else {
+      for (const row of rows) {
+        if (y > 270) {
+          doc.addPage();
+          y = drawStandardSection(doc, "Detalle de movimientos · continuación", 20);
+          y = drawStandardTableHeader(doc, ["FECHA", "TIPO", "DESCRIPCIÓN", "RESPONSABLE", "ESTADO", "MONTO"], columns, y);
+        }
+        doc.setFontSize(7);
+        doc.setTextColor(...REPORT_MUTED);
+        doc.text(reportDate(row.created_at), columns[0], y);
+        doc.setTextColor(...REPORT_DARK);
+        doc.text(String(row.type || "—").toUpperCase().slice(0, 8), columns[1], y);
+        doc.text(String(row.description || "Sin descripción").slice(0, 24), columns[2], y);
+        doc.text(String(row.responsible || "—").slice(0, 20), columns[3], y);
+        doc.text(String(row.approval_status || "—").slice(0, 10), columns[4], y);
+        doc.setTextColor(...REPORT_GREEN);
+        doc.text(reportMoney(row.amount), columns[5], y, { align: "right" });
+        y += 7;
       }
     }
-    doc.setFontSize(13);
-    doc.text(`Balance: $${balance} MXN`, 14, y + 8);
+
+    y = drawStandardSection(doc, "Indicadores de control", y + 3);
+    doc.setFontSize(8);
+    doc.setTextColor(...REPORT_DARK);
+    doc.text("Movimientos aprobados: " + approved + " · pendientes: " + pending, 14, y);
+    drawStandardFooter(doc);
+
     const pdf = Buffer.from(doc.output("arraybuffer"));
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", "inline; filename=jnatjo-fondo-comunitario.pdf");
+    res.setHeader("Content-Disposition", "attachment; filename=jnatjo-reporte-fondo-comunitario.pdf");
     res.send(pdf);
   } catch (error) {
     next(error);
