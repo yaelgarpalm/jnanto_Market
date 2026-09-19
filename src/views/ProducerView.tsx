@@ -2,6 +2,7 @@ import React, { FormEvent } from "react";
 import { Download, FileText, ImageUp, PackageCheck, Plus, QrCode, ReceiptText, Trash2 } from "lucide-react";
 import { MaterialItem, Order, Producer, Product, Profile, ProducerSettlementSummary } from "../types";
 import SettlementPanel from "../components/SettlementPanel";
+import ReportCard from "../components/ReportCard";
 
 interface ProducerViewProps {
   profile: Profile | null;
@@ -124,6 +125,15 @@ export default function ProducerView({
 
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_520px] 2xl:grid-cols-[minmax(0,1fr)_580px]">
+      <div className="xl:col-span-2">
+        <ReportCard
+          title="Reporte del productor"
+          description="PDF con piezas registradas, ventas confirmadas, unidades vendidas y monto correspondiente al productor."
+          buttonLabel="Generar y descargar PDF"
+          onDownload={onDownloadReport}
+        />
+      </div>
+
       <SettlementPanel
         mode="producer"
         period={settlementPeriod}
@@ -424,15 +434,7 @@ export default function ProducerView({
             <h3 className="font-serif font-bold text-[#2D2D2A] text-sm">Mis Registros de Piezas</h3>
             <p className="text-[11px] text-[#6B665F] leading-tight">Haz clic en tu pieza registrada para consultar su código de trazabilidad y auditar su línea de tiempo.</p>
           </div>
-          <button
-            type="button"
-            onClick={onDownloadReport}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#5A6A42] hover:bg-[#2D2D2A] px-3 py-2 text-[10px] font-bold uppercase text-white transition-all cursor-pointer"
-          >
-            <FileText className="h-3.5 w-3.5" />
-            Reporte PDF
-            <Download className="h-3 w-3" />
-          </button>
+
         </div>
         <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
           {visibleProducts.length === 0 ? (
