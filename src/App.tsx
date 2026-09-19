@@ -277,8 +277,8 @@ export default function App() {
     return body as T;
   }
 
-  async function loadPublicData() {
-    setLoading(true);
+  async function loadPublicData(silent = false) {
+    if (!silent) setLoading(true);
     try {
       const [productRows, coopRows, producerRows, resourceRows, fund] = await Promise.all([
         api<Product[]>("/api/products?includePending=true"),
@@ -300,7 +300,7 @@ export default function App() {
         setSensorForm((prev) => ({ ...prev, productId: productRows[0].id }));
       }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
