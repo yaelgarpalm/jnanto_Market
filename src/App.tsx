@@ -1220,23 +1220,32 @@ export default function App() {
 
     try {
       const writer = new NDEFReader();
+      const controller = new AbortController();
+
       setAuthMessage("Acerca la etiqueta NFC al teléfono. Manténla cerca hasta que termine la escritura.");
 
-      await writer.write({
-        records: [
-          {
-            recordType: "url",
-            data: url,
-          },
-          {
-            recordType: "text",
-            data: `Jnanto Market · ${product.name} · Trazabilidad ${product.traceCode}`,
-            lang: "es",
-          },
-        ],
-      });
+      await writer.write(
+        {
+          records: [
+            {
+              recordType: "url",
+              data: url,
+            },
+            {
+              recordType: "text",
+              data: `Jnanto Market · ${product.name} · Trazabilidad ${product.traceCode}`,
+              lang: "es",
+            },
+          ],
+        },
+        { signal: controller.signal }
+      );
 
-      setAuthMessage("Etiqueta NFC grabada. Al acercarla a un teléfono, abrirá directamente la ficha pública del producto.");
+      // Web NFC puede dejar activa la sesión de escritura después de resolver
+      // la promesa. La cerramos explícitamente para liberar el lector.
+      controller.abort();
+
+      setAuthMessage("Etiqueta NFC programada correctamente. Ya puedes retirar el teléfono y acercar la etiqueta para probarla.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (/cancel|abort/i.test(message)) {
