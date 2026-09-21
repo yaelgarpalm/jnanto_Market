@@ -142,6 +142,7 @@ export default function App() {
   const [nfcWriteState, setNfcWriteState] = useState<"idle" | "waiting" | "success" | "error">("idle");
   const [nfcReaderState, setNfcReaderState] = useState<"idle" | "prompt" | "scanning" | "detected">("idle");
   const [nfcDetectedName, setNfcDetectedName] = useState("");
+  const [showNfcToast, setShowNfcToast] = useState(false);
   const nfcReaderAbortRef = useRef<AbortController | null>(null);
   const [nfcWriteProgress, setNfcWriteProgress] = useState(0);
   const nfcWriteTimerRef = useRef<number | null>(null);
@@ -492,7 +493,8 @@ export default function App() {
   useEffect(() => {
     if (publicTraceCode) return;
     const NDEFReader = (window as any).NDEFReader;
-    if (NDEFReader && window.innerWidth <= 900) {
+    const enabled = window.localStorage.getItem("jnanto_nfc_enabled") === "1";
+    if (NDEFReader && window.innerWidth <= 900 && !enabled) {
       const timer = window.setTimeout(() => setNfcReaderState("prompt"), 900);
       return () => window.clearTimeout(timer);
     }
@@ -1303,11 +1305,8 @@ export default function App() {
           if (!result) throw new Error("Producto no encontrado");
           setNfcDetectedName(result.product.name);
           setNfcReaderState("detected");
-          await notifyNfcProduct(result.product);
-          window.history.pushState({}, "", `/trazabilidad/${encodeURIComponent(traceCode)}?nfc=1`);
-          setShowNfcOpenCard(true);
-          setRouteTick((value) => value + 1);
-          window.setTimeout(() => setNfcReaderState("idle"), 1400);
+          setShowNfcToast(true);
+          window.setTimeout(() => setNfcReaderState("scanning"), 900);
         } catch (error) {
           setAuthMessage(error instanceof Error ? error.message : "No se pudo identificar el producto NFC.");
         }
@@ -1561,7 +1560,7 @@ export default function App() {
         {publicTrace && showNfcOpenCard && (
           <NfcOpenCard
             product={publicTrace.product}
-            onOpen={() => setShowNfcOpenCard(false)}
+            onOpen={() => { setShowNfcToast(false); setShowNfcOpenCard(false); window.history.pushState({}, "", `/trazabilidad/${encodeURIComponent(publicTrace.product.traceCode)}?nfc=1`); setRouteTick((value) => value + 1); }}
           />
         )}
       </>
@@ -1602,8 +1601,24 @@ export default function App() {
             <h3 className="text-xl font-black text-[#101815]">Activar lector NFC</h3>
             <p className="mt-2 text-sm leading-relaxed text-[#69736d]">Acepta una vez para que Jnanto pueda detectar etiquetas NFC mientras estás en el sitio. Después solo acerca la etiqueta.</p>
             <div className="mt-4 rounded-2xl bg-[#f6f8f6] p-3 text-xs text-[#69736d]"><div className="flex items-center gap-2 font-bold text-[#004d32]"><Bell className="h-4 w-4" /> Detección y aviso de producto</div><p className="mt-1">Se intentará activar también la notificación del sistema y un sonido corto.</p></div>
-            <button type="button" onClick={startNfcReader} className="mt-5 w-full rounded-2xl bg-[#004d32] px-5 py-4 text-sm font-black text-white">Aceptar y activar NFC</button>
+            <button type="button" onClick={async () => { window.localStorage.setItem("jnanto_nfc_enabled", "1"); await startNfcReader(); }} className="mt-5 w-full rounded-2xl bg-[#004d32] px-5 py-4 text-sm font-black text-white">Aceptar y activar NFC</button>
             <button type="button" onClick={() => setNfcReaderState("idle")} className="mt-2 w-full rounded-2xl px-5 py-3 text-sm font-bold text-[#69736d]">Ahora no</button>
+          </div>
+        </div>
+      )}
+
+      {showNfcToast && publicTrace?.product && (
+        <div className="fixed left-1/2 top-4 z-[80] w-[calc(100%-24px)] max-w-md -translate-x-1/2">
+          <div className="flex items-center gap-3 rounded-2xl border border-black/5 bg-white p-3 shadow-[0_18px_50px_rgba(16,24,21,0.22)]">
+            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-[#f1eee8]">
+              {(publicTrace.product.images?.[0] || publicTrace.product.image) && <img src={publicTrace.product.images?.[0] || publicTrace.product.image} alt="" className="h-full w-full object-cover" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-[#004d32]">Etiqueta NFC detectada</p>
+              <p className="truncate text-sm font-black text-[#101815]">{nfcDetectedName}</p>
+              <p className="text-[11px] text-[#69736d]">Toca para abrir el producto</p>
+            </div>
+            <button type="button" onClick={() => { setShowNfcToast(false); setShowNfcOpenCard(true); }} className="shrink-0 rounded-xl bg-[#004d32] px-4 py-3 text-sm font-black text-white">Abrir</button>
           </div>
         </div>
       )}
