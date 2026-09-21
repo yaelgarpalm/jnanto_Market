@@ -1634,9 +1634,13 @@ export default function App() {
           message={authMessage}
           profile={profile}
           onBack={() => {
+            stopNfcReader();
             window.history.pushState({}, "", "/");
             setPublicTrace(null);
             setShowNfcOpenCard(false);
+            setShowNfcToast(false);
+            setNfcDetectedName("");
+            setRouteTick((value) => value + 1);
           }}
           onConfirmReceipt={confirmReceiptFromTrace}
         />
