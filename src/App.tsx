@@ -1306,31 +1306,51 @@ export default function App() {
 
   async function notifyNfcProduct(product: Product) {
     const target = `${window.location.origin}/trazabilidad/${encodeURIComponent(product.traceCode)}?nfc=1`;
+    const notificationTag = `jnanto-nfc-${product.traceCode}`;
 
     try {
-      if ("Notification" in window && Notification.permission === "default") {
-        await Notification.requestPermission();
+      if (!("Notification" in window)) return;
+
+      if (Notification.permission === "default") {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") return;
       }
 
-      if ("serviceWorker" in navigator && Notification.permission === "granted") {
+      if (Notification.permission !== "granted") return;
+
+      if ("serviceWorker" in navigator) {
         const registration = await navigator.serviceWorker.ready;
+
+        // Un solo canal lógico por producto. Cada lectura renueva la
+        // notificación y Android vuelve a notificar aunque sea la misma etiqueta.
         await registration.showNotification("Jñatjo Market", {
-          body: `Producto detectado: ${product.name}`,
+          body: `NFC detectado · ${product.name} · Toca para abrir`,
           icon: product.images?.[0] || product.image || "/icons/icon-192.svg",
           badge: "/icons/icon-192.svg",
-          tag: `jnanto-nfc-${product.traceCode}-${Date.now()}`,
+          tag: notificationTag,
           renotify: true,
-          requireInteraction: true,
+          silent: false,
           vibrate: [120, 70, 120],
+          timestamp: Date.now(),
           data: { url: target, traceCode: product.traceCode },
           actions: [{ action: "open", title: "Abrir producto" }],
         });
+        return;
       }
+
+      // Respaldo para navegadores que no expongan Service Worker notifications.
+      new Notification("Jñatjo Market", {
+        body: `NFC detectado · ${product.name} · Toca para abrir`,
+        icon: product.images?.[0] || product.image || undefined,
+        tag: notificationTag,
+        renotify: true,
+        silent: false,
+      });
     } catch {
-      // La interfaz flotante interna sigue funcionando aunque el sistema bloquee notificaciones.
+      // La interfaz flotante interna sigue funcionando aunque Android bloquee
+      // la presentación de la notificación del sistema.
     }
   }
-
 
   function decodeNfcRecord(record: any): string {
     try {
@@ -1417,7 +1437,8 @@ export default function App() {
 
             setNfcDetectedName(result.product.name);
             setNfcReaderState("detected");
-            setShowNfcToast(true);
+            setShowNfcToast(false);
+            window.setTimeout(() => setShowNfcToast(true), 30);
             await notifyNfcProduct(result.product);
           } catch (error) {
             setAuthMessage(error instanceof Error ? error.message : "No se pudo identificar el producto NFC.");
