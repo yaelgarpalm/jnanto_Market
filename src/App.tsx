@@ -27,6 +27,7 @@ import Navbar, { NavNotification } from "./components/Navbar";
 import AuthPanel from "./components/AuthPanel";
 import CartPanel from "./components/CartPanel";
 import TraceModal from "./components/TraceModal";
+import NfcOpenCard from "./components/NfcOpenCard";
 
 // Views
 import MarketplaceView from "./views/MarketplaceView";
@@ -137,6 +138,7 @@ export default function App() {
   const [traceStages, setTraceStages] = useState<TraceabilityStage[]>([]);
   const [anchors, setAnchors] = useState<BlockchainAnchor[]>([]);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [showNfcOpenCard, setShowNfcOpenCard] = useState(false);
   const [publicTrace, setPublicTrace] = useState<{
     product: Product;
     stages: TraceabilityStage[];
@@ -486,7 +488,8 @@ export default function App() {
 
   useEffect(() => {
     if (publicTraceCode) {
-      loadPublicTrace(publicTraceCode).catch((error) => setAuthMessage(error.message));
+      setShowNfcOpenCard(false);
+      loadPublicTrace(publicTraceCode).then(() => setShowNfcOpenCard(true)).catch((error) => setAuthMessage(error.message));
     } else {
       loadPublicData().catch((error) => setAuthMessage(error.message));
     }
@@ -1360,17 +1363,26 @@ export default function App() {
 
   if (publicTraceCode) {
     return (
-      <PublicTracePage
-        traceCode={publicTraceCode}
-        data={publicTrace}
-        message={authMessage}
-        profile={profile}
-        onBack={() => {
-          window.history.pushState({}, "", "/");
-          setPublicTrace(null);
-        }}
-        onConfirmReceipt={confirmReceiptFromTrace}
-      />
+      <>
+        <PublicTracePage
+          traceCode={publicTraceCode}
+          data={publicTrace}
+          message={authMessage}
+          profile={profile}
+          onBack={() => {
+            window.history.pushState({}, "", "/");
+            setPublicTrace(null);
+            setShowNfcOpenCard(false);
+          }}
+          onConfirmReceipt={confirmReceiptFromTrace}
+        />
+        {publicTrace && showNfcOpenCard && (
+          <NfcOpenCard
+            product={publicTrace.product}
+            onOpen={() => setShowNfcOpenCard(false)}
+          />
+        )}
+      </>
     );
   }
 
