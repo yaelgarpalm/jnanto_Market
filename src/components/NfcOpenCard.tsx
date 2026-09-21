@@ -73,7 +73,7 @@ export default function NfcOpenCard({ product, onOpen }: NfcOpenCardProps) {
             onClick={onOpen}
             className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#004d32] px-5 py-4 text-sm font-black text-white shadow-[0_12px_28px_rgba(0,77,50,0.22)] transition hover:bg-[#003c27] active:scale-[0.99]"
           >
-            Abrir producto
+            Abrir producto {seconds > 0 ? `· ${seconds}s` : ""}
             <ArrowRight className="h-4 w-4" />
           </button>
 
