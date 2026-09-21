@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { ArrowRight, CheckCircle2, Fingerprint, MapPin, ShieldCheck } from "lucide-react";
 import { Product } from "../types";
 
@@ -9,6 +9,16 @@ interface NfcOpenCardProps {
 
 export default function NfcOpenCard({ product, onOpen }: NfcOpenCardProps) {
   const image = product.images?.[0] || product.image;
+  const [seconds, setSeconds] = useState(2);
+
+  useEffect(() => {
+    const started = window.setTimeout(() => onOpen(), 2400);
+    const tick = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000);
+    return () => {
+      window.clearTimeout(started);
+      window.clearInterval(tick);
+    };
+  }, [onOpen]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#101815]/35 px-3 pb-3 pt-10 backdrop-blur-[3px] sm:items-center sm:p-5 animate-fade-in">
