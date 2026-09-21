@@ -1366,9 +1366,6 @@ export default function App() {
           } finally {
             nfcReadBusyRef.current = false;
             window.setTimeout(() => {
-              if (nfcReaderAbortRef.current === controller.signal ? null : true) {
-                // La comprobación real del lector se hace por referencia/estado abajo.
-              }
               if (nfcReaderRef.current === reader) setNfcReaderState("scanning");
             }, 700);
           }
