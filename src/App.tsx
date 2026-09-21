@@ -489,6 +489,15 @@ export default function App() {
   }, [authReady, checkoutParams, session]);
 
   useEffect(() => {
+    if (publicTraceCode) return;
+    const NDEFReader = (window as any).NDEFReader;
+    if (NDEFReader && window.innerWidth <= 900) {
+      const timer = window.setTimeout(() => setNfcReaderState("prompt"), 900);
+      return () => window.clearTimeout(timer);
+    }
+  }, [publicTraceCode]);
+
+  useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setAuthReady(true);
