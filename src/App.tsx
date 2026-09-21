@@ -1346,9 +1346,12 @@ export default function App() {
     try {
       const writer = new NDEFReader();
 
+      // Estimación visual basada en una escritura NFC típica de pocos registros:
+      // el círculo llega aproximadamente al 92% en ~3 segundos y espera la
+      // confirmación real de writer.write() para completar el 100%.
       nfcWriteTimerRef.current = window.setInterval(() => {
-        setNfcWriteProgress((current) => Math.min(current + (current < 45 ? 4 : 1), 86));
-      }, 250);
+        setNfcWriteProgress((current) => Math.min(current + 3.5, 92));
+      }, 120);
 
       setAuthMessage("Acerca la etiqueta NFC al teléfono y no la retires hasta que el teléfono confirme la escritura.");
 
