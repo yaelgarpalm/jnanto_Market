@@ -1209,15 +1209,42 @@ export default function App() {
       setAuthMessage("Solo productores, cooperativas y administradores pueden escribir etiquetas NFC.");
       return;
     }
+
     const url = `${window.location.origin}/trazabilidad/${encodeURIComponent(product.traceCode)}`;
     const NDEFReader = (window as any).NDEFReader;
+
     if (!NDEFReader) {
-      setAuthMessage("Tu navegador o dispositivo móvil actual no soporta Web NFC. Utiliza el código QR impreso.");
+      setAuthMessage("Este dispositivo no permite escribir NFC desde el navegador. Usa Chrome en Android o el código QR.");
       return;
     }
-    const writer = new NDEFReader();
-    await writer.write(url);
-    setAuthMessage("Chip NFC grabado exitosamente con la dirección de trazabilidad.");
+
+    try {
+      const writer = new NDEFReader();
+      setAuthMessage("Acerca la etiqueta NFC al teléfono. Manténla cerca hasta que termine la escritura.");
+
+      await writer.write({
+        records: [
+          {
+            recordType: "url",
+            data: url,
+          },
+          {
+            recordType: "text",
+            data: `Jnanto Market · ${product.name} · Trazabilidad ${product.traceCode}`,
+            lang: "es",
+          },
+        ],
+      });
+
+      setAuthMessage("Etiqueta NFC grabada. Al acercarla a un teléfono, abrirá directamente la ficha pública del producto.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (/cancel|abort/i.test(message)) {
+        setAuthMessage("Escritura NFC cancelada.");
+      } else {
+        setAuthMessage("No se pudo grabar la etiqueta NFC. Mantén el teléfono cerca de la etiqueta e inténtalo nuevamente.");
+      }
+    }
   }
 
   async function reserveResource(event: FormEvent) {
