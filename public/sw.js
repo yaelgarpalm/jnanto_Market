@@ -1,41 +1,59 @@
-const CACHE = "jnanto-static-v1";
-const APP_SHELL = ["/", "/manifest.json"];
+const CACHE = "jnanto-static-v2";
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE)
+          .map((key) => caches.delete(key))
+      )
+    ).then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).then((response) => {
-        const copy = response.clone();
-        if (event.request.url.startsWith(self.location.origin)) {
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok && event.request.url.startsWith(self.location.origin)) {
+          const copy = response.clone();
           caches.open(CACHE).then((cache) => cache.put(event.request, copy)).catch(() => undefined);
         }
         return response;
-      }).catch(() => cached);
-    })
+      })
+      .catch(() => caches.match(event.request).then((cached) => cached || caches.match("/")))
   );
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+
   const target = event.notification.data?.url || "/";
+
   event.waitUntil(
-    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
-      const client = clients.find((item) => "focus" in item);
-      if (client) {
-        client.focus();
-        return client.navigate(target);
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (clients) => {
+      const existing = clients.find((client) => client.url.startsWith(self.location.origin));
+
+      if (existing) {
+        await existing.focus();
+        try {
+          await existing.navigate(target);
+        } catch {
+          // Si navigate falla, la ventana permanece enfocada.
+        }
+        return;
       }
-      if (self.clients.openWindow) return self.clients.openWindow(target);
-      return undefined;
+
+      if (self.clients.openWindow) {
+        await self.clients.openWindow(target);
+      }
     })
   );
 });
