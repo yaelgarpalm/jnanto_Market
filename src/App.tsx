@@ -425,6 +425,7 @@ export default function App() {
       `/api/traceability/code/${encodeURIComponent(traceCode)}`,
     );
     setPublicTrace(data);
+    return data;
   }
 
   async function confirmReceiptFromTrace(
@@ -1327,7 +1328,7 @@ export default function App() {
       return;
     }
 
-    const url = `${window.location.origin}/trazabilidad/${encodeURIComponent(product.traceCode)'}?nfc=1`;
+    const url = `${window.location.origin}/trazabilidad/${encodeURIComponent(product.traceCode)}?nfc=1`;
     const NDEFReader = (window as any).NDEFReader;
 
     if (!NDEFReader) {
