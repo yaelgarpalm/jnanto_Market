@@ -1,5 +1,5 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { AlertCircle, CheckCircle2, Fingerprint, RefreshCw } from "lucide-react";
 import { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 
@@ -139,6 +139,9 @@ export default function App() {
   const [anchors, setAnchors] = useState<BlockchainAnchor[]>([]);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [showNfcOpenCard, setShowNfcOpenCard] = useState(false);
+  const [nfcWriteState, setNfcWriteState] = useState<"idle" | "waiting" | "success" | "error">("idle");
+  const [nfcWriteProgress, setNfcWriteProgress] = useState(0);
+  const nfcWriteTimerRef = useRef<number | null>(null);
   const [publicTrace, setPublicTrace] = useState<{
     product: Product;
     stages: TraceabilityStage[];
@@ -1210,7 +1213,7 @@ export default function App() {
       return;
     }
 
-    const url = `${window.location.origin}/trazabilidad/${encodeURIComponent(product.traceCode)}`;
+    const url = `${window.location.origin}/trazabilidad/${encodeURIComponent(product.traceCode)'}?nfc=1`;
     const NDEFReader = (window as any).NDEFReader;
 
     if (!NDEFReader) {
@@ -1218,41 +1221,66 @@ export default function App() {
       return;
     }
 
+    if (nfcWriteTimerRef.current) {
+      window.clearInterval(nfcWriteTimerRef.current);
+      nfcWriteTimerRef.current = null;
+    }
+
+    setNfcWriteState("waiting");
+    setNfcWriteProgress(12);
+
     try {
       const writer = new NDEFReader();
-      const controller = new AbortController();
 
-      setAuthMessage("Acerca la etiqueta NFC al teléfono. Manténla cerca hasta que termine la escritura.");
+      nfcWriteTimerRef.current = window.setInterval(() => {
+        setNfcWriteProgress((current) => Math.min(current + (current < 45 ? 4 : 1), 86));
+      }, 250);
 
-      await writer.write(
-        {
-          records: [
-            {
-              recordType: "url",
-              data: url,
-            },
-            {
-              recordType: "text",
-              data: `Jnanto Market · ${product.name} · Trazabilidad ${product.traceCode}`,
-              lang: "es",
-            },
-          ],
-        },
-        { signal: controller.signal }
-      );
+      setAuthMessage("Acerca la etiqueta NFC al teléfono y no la retires hasta que el teléfono confirme la escritura.");
 
-      // Web NFC puede dejar activa la sesión de escritura después de resolver
-      // la promesa. La cerramos explícitamente para liberar el lector.
-      controller.abort();
+      await writer.write({
+        records: [
+          { recordType: "url", data: url },
+          {
+            recordType: "text",
+            data: `Jnanto Market · ${product.name} · Trazabilidad ${product.traceCode}`,
+            lang: "es",
+          },
+        ],
+      });
 
-      setAuthMessage("Etiqueta NFC programada correctamente. Ya puedes retirar el teléfono y acercar la etiqueta para probarla.");
+      if (nfcWriteTimerRef.current) {
+        window.clearInterval(nfcWriteTimerRef.current);
+        nfcWriteTimerRef.current = null;
+      }
+
+      setNfcWriteProgress(100);
+      setNfcWriteState("success");
+      setAuthMessage("Etiqueta NFC programada correctamente. Ya puedes retirarla.");
+
+      window.setTimeout(() => {
+        setNfcWriteState("idle");
+        setNfcWriteProgress(0);
+      }, 1800);
     } catch (error) {
+      if (nfcWriteTimerRef.current) {
+        window.clearInterval(nfcWriteTimerRef.current);
+        nfcWriteTimerRef.current = null;
+      }
+
       const message = error instanceof Error ? error.message : "";
+      setNfcWriteState("error");
+      setNfcWriteProgress(0);
+
       if (/cancel|abort/i.test(message)) {
         setAuthMessage("Escritura NFC cancelada.");
+      } else if (/network|removed|notreadable/i.test(message)) {
+        setAuthMessage("La etiqueta se retiró antes de completar la escritura. Vuelve a acercarla y espera la confirmación.");
       } else {
         setAuthMessage("No se pudo grabar la etiqueta NFC. Mantén el teléfono cerca de la etiqueta e inténtalo nuevamente.");
       }
+
+      window.setTimeout(() => setNfcWriteState("idle"), 2200);
     }
   }
 
@@ -1448,6 +1476,47 @@ export default function App() {
         notifications={notificationItems}
         onNotificationClick={handleNotificationClick}
       />
+
+      {nfcWriteState !== "idle" && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-[28px] bg-white p-7 text-center shadow-[0_30px_90px_rgba(0,0,0,0.28)]">
+            <div className="mx-auto flex h-28 w-28 items-center justify-center">
+              <div
+                className="relative flex h-28 w-28 items-center justify-center rounded-full"
+                style={{
+                  background: `conic-gradient(#004d32 ${nfcWriteProgress}%, #e8ece9 ${nfcWriteProgress}% 100%)`,
+                }}
+              >
+                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white">
+                  {nfcWriteState === "success" ? (
+                    <CheckCircle2 className="h-10 w-10 text-[#004d32]" />
+                  ) : nfcWriteState === "error" ? (
+                    <AlertCircle className="h-10 w-10 text-red-500" />
+                  ) : (
+                    <Fingerprint className="h-9 w-9 text-[#004d32]" />
+                  )}
+                </div>
+              </div>
+            </div>
+            <h3 className="mt-5 text-xl font-black text-[#101815]">
+              {nfcWriteState === "waiting" ? "Programando etiqueta NFC" : nfcWriteState === "success" ? "Etiqueta programada" : "Escritura no completada"}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-[#69736d]">
+              {nfcWriteState === "waiting"
+                ? "Mantén la etiqueta junto al teléfono. No la retires hasta que aparezca la confirmación."
+                : nfcWriteState === "success"
+                  ? "La etiqueta recibió la URL y los datos de identificación del producto."
+                  : "Acerca nuevamente la etiqueta y espera la confirmación del teléfono."}
+            </p>
+            <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#e8ece9]">
+              <div className="h-full rounded-full bg-[#004d32] transition-all duration-200" style={{ width: `${nfcWriteProgress}%` }} />
+            </div>
+            <p className="mt-2 text-[11px] font-bold uppercase tracking-widest text-[#8a938d]">
+              {nfcWriteState === "waiting" ? `${nfcWriteProgress}% · Esperando confirmación` : nfcWriteState === "success" ? "100% · Confirmado" : "Reintenta la escritura"}
+            </p>
+          </div>
+        </div>
+      )}
 
       {authMessage && (
         <div className="fixed right-4 top-32 z-40 max-w-sm rounded-xl border border-[#004d32]/20 bg-white px-4 py-3 text-sm font-semibold text-[#004d32] shadow-[0_18px_45px_rgba(0,0,0,0.16)] animate-fade-in">
