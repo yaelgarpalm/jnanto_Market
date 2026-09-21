@@ -143,7 +143,11 @@ export default function App() {
   const [nfcReaderState, setNfcReaderState] = useState<"idle" | "prompt" | "scanning" | "detected">("idle");
   const [nfcDetectedName, setNfcDetectedName] = useState("");
   const [showNfcToast, setShowNfcToast] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
   const nfcReaderAbortRef = useRef<AbortController | null>(null);
+  const nfcReaderRef = useRef<any>(null);
+  const nfcLastReadRef = useRef<{ code: string; at: number } | null>(null);
+  const nfcReadBusyRef = useRef(false);
   const [nfcWriteProgress, setNfcWriteProgress] = useState(0);
   const nfcWriteTimerRef = useRef<number | null>(null);
   const [publicTrace, setPublicTrace] = useState<{
@@ -491,14 +495,44 @@ export default function App() {
   }, [authReady, checkoutParams, session]);
 
   useEffect(() => {
+    const handleBeforeInstall = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+    const handleInstalled = () => setInstallPrompt(null);
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall as EventListener);
+    window.addEventListener("appinstalled", handleInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstall as EventListener);
+      window.removeEventListener("appinstalled", handleInstalled);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      if (window.localStorage.getItem("jnanto_nfc_enabled") === "1" && (window as any).NDEFReader && !publicTraceCode) {
+        // Algunos móviles suspenden temporalmente Web NFC al cambiar de foco.
+        // Al volver al sitio, rearmamos el lector sin pedir permiso otra vez.
+        window.setTimeout(() => {
+          if (nfcReaderState === "idle") void startNfcReader();
+        }, 250);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [publicTraceCode, nfcReaderState]);
+
+  useEffect(() => {
     if (publicTraceCode) return;
     const NDEFReader = (window as any).NDEFReader;
     const enabled = window.localStorage.getItem("jnanto_nfc_enabled") === "1";
     if (NDEFReader && window.innerWidth <= 900 && !enabled) {
-      const timer = window.setTimeout(() => setNfcReaderState("prompt"), 900);
+      const timer = window.setTimeout(() => setNfcReaderState("prompt"), 700);
       return () => window.clearTimeout(timer);
     }
   }, [publicTraceCode]);
+
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1284,42 +1318,94 @@ export default function App() {
   async function startNfcReader() {
     const NDEFReader = (window as any).NDEFReader;
     if (!NDEFReader) {
-      setAuthMessage("Este teléfono no permite leer NFC desde el navegador. Puedes acercar la etiqueta y usar el enlace que muestra Android.");
+      setAuthMessage("Este teléfono no permite leer NFC desde el navegador. Puedes usar la detección nativa de Android o instalar la PWA.");
       return;
     }
+
     try {
+      window.localStorage.setItem("jnanto_nfc_enabled", "1");
       if ("Notification" in window && Notification.permission === "default") {
         await Notification.requestPermission().catch(() => undefined);
       }
+
       nfcReaderAbortRef.current?.abort();
+
       const controller = new AbortController();
-      nfcReaderAbortRef.current = controller;
       const reader = new NDEFReader();
-      setNfcReaderState("scanning");
-      setAuthMessage("NFC activo. Acerca una etiqueta de producto al teléfono.");
-      reader.addEventListener("reading", async (event: any) => {
+      nfcReaderAbortRef.current = controller;
+      nfcReaderRef.current = reader;
+
+      const handleReading = (event: any) => {
         const traceCode = extractNfcTraceCode(event.message);
-        if (!traceCode) return;
-        try {
-          const result = await loadPublicTrace(traceCode);
-          if (!result) throw new Error("Producto no encontrado");
-          setNfcDetectedName(result.product.name);
-          setNfcReaderState("detected");
-          setShowNfcToast(true);
-          window.setTimeout(() => setNfcReaderState("scanning"), 900);
-        } catch (error) {
-          setAuthMessage(error instanceof Error ? error.message : "No se pudo identificar el producto NFC.");
+        if (!traceCode) {
+          setAuthMessage("Etiqueta detectada, pero no contiene un código Jnanto válido.");
+          return;
+        }
+
+        const now = Date.now();
+        const last = nfcLastReadRef.current;
+        if (last && last.code === traceCode && now - last.at < 1400) return;
+        nfcLastReadRef.current = { code: traceCode, at: now };
+
+        if (nfcReadBusyRef.current) return;
+        nfcReadBusyRef.current = true;
+
+        void (async () => {
+          try {
+            const result = await loadPublicTrace(traceCode);
+            if (!result) throw new Error("Producto no encontrado");
+
+            setNfcDetectedName(result.product.name);
+            setNfcReaderState("detected");
+            setShowNfcToast(true);
+
+            // El lector permanece activo; no abortamos la sesión después de una lectura.
+            // Así se pueden detectar varias etiquetas consecutivas en la misma visita.
+          } catch (error) {
+            setAuthMessage(error instanceof Error ? error.message : "No se pudo identificar el producto NFC.");
+          } finally {
+            nfcReadBusyRef.current = false;
+            window.setTimeout(() => {
+              if (nfcReaderAbortRef.current === controller.signal ? null : true) {
+                // La comprobación real del lector se hace por referencia/estado abajo.
+              }
+              if (nfcReaderRef.current === reader) setNfcReaderState("scanning");
+            }, 700);
+          }
+        })();
+      };
+
+      reader.addEventListener("reading", handleReading, { signal: controller.signal });
+      reader.addEventListener("readingerror", () => {
+        // Un error momentáneo de lectura no desactiva el lector; el siguiente acercamiento puede leerse.
+        if (nfcReaderRef.current === reader) {
+          setAuthMessage("NFC activo. Mantén la etiqueta cerca del teléfono y vuelve a intentarlo.");
         }
       }, { signal: controller.signal });
+
+      setNfcReaderState("scanning");
+      setAuthMessage("NFC activo. Puedes acercar una etiqueta tras otra.");
+
       await reader.scan({ signal: controller.signal });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (!/abort/i.test(message)) {
+        nfcReaderRef.current = null;
+        nfcReaderAbortRef.current = null;
         setNfcReaderState("idle");
-        setAuthMessage("No se pudo activar el lector NFC. Verifica que NFC esté activado en el teléfono.");
+        setAuthMessage("No se pudo mantener activo el lector NFC. Pulsa reactivar NFC e inténtalo nuevamente.");
       }
     }
   }
+
+  function stopNfcReader() {
+    nfcReaderAbortRef.current?.abort();
+    nfcReaderAbortRef.current = null;
+    nfcReaderRef.current = null;
+    setNfcReaderState("idle");
+    nfcReadBusyRef.current = false;
+  }
+
 
   async function writeNfc(product: Product) {
     if (!profile || !["producer", "cooperative", "admin"].includes(profile.role)) {
@@ -1594,6 +1680,19 @@ export default function App() {
         onNotificationClick={handleNotificationClick}
       />
 
+      {installPrompt && (
+        <div className="fixed bottom-20 left-1/2 z-[61] w-[calc(100%-24px)] max-w-md -translate-x-1/2 rounded-2xl bg-white p-4 shadow-[0_16px_45px_rgba(0,0,0,0.2)] ring-1 ring-black/5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#eaf3ed] text-[#004d32]"><Smartphone className="h-5 w-5" /></div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-black text-[#101815]">Instalar Jñatjo Market</p>
+              <p className="text-xs leading-relaxed text-[#69736d]">Ábrelo como app para mantener el lector NFC más estable mientras usas el sitio.</p>
+            </div>
+            <button type="button" onClick={async () => { const prompt = installPrompt; setInstallPrompt(null); if (prompt) { await prompt.prompt(); await prompt.userChoice; } }} className="shrink-0 rounded-xl bg-[#004d32] px-3 py-2.5 text-xs font-black text-white">Instalar</button>
+          </div>
+        </div>
+      )}
+
       {nfcReaderState === "prompt" && (
         <div className="fixed inset-0 z-[65] flex items-end justify-center bg-[#101815]/45 p-3 backdrop-blur-sm sm:items-center">
           <div className="w-full max-w-md rounded-[28px] bg-white p-6 shadow-[0_30px_90px_rgba(0,0,0,0.28)]">
@@ -1625,7 +1724,7 @@ export default function App() {
 
       {nfcReaderState === "scanning" && (
         <div className="fixed bottom-5 left-1/2 z-[60] w-[calc(100%-24px)] max-w-md -translate-x-1/2 rounded-2xl bg-white p-4 shadow-[0_16px_45px_rgba(0,0,0,0.2)] ring-1 ring-black/5">
-          <div className="flex items-center gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#eaf3ed] text-[#004d32]"><Fingerprint className="h-5 w-5 animate-pulse" /></div><div className="min-w-0 flex-1"><p className="text-sm font-black text-[#101815]">NFC activo</p><p className="truncate text-xs text-[#69736d]">Acerca una etiqueta para detectar el producto</p></div><button type="button" onClick={() => { nfcReaderAbortRef.current?.abort(); setNfcReaderState("idle"); }} className="text-xs font-bold text-[#69736d]">Cerrar</button></div>
+          <div className="flex items-center gap-3"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#eaf3ed] text-[#004d32]"><Fingerprint className="h-5 w-5 animate-pulse" /></div><div className="min-w-0 flex-1"><p className="text-sm font-black text-[#101815]">NFC activo</p><p className="truncate text-xs text-[#69736d]">Acerca una etiqueta para detectar el producto</p></div><div className="flex items-center gap-2"><button type="button" onClick={() => void startNfcReader()} className="text-xs font-bold text-[#004d32]">Reactivar</button><button type="button" onClick={stopNfcReader} className="text-xs font-bold text-[#69736d]">Cerrar</button></div></div>
         </div>
       )}
 
