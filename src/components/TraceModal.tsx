@@ -155,7 +155,7 @@ export default function TraceModal({
                 ) : (
                   <QrCode className="mx-auto h-32 w-32 stroke-[1.1] text-[#8A847C]" />
                 )}
-                <p className="mt-2 text-[10px] text-[#6B665F] font-serif italic">Escanea con tu celular para auditar el origen</p>
+                <p className="mt-2 text-[10px] text-[#6B665F] font-serif italic">Escanea con tu celular para consultar el producto</p>
               </div>
 
               {canManageTraceability && (
@@ -165,7 +165,7 @@ export default function TraceModal({
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2D2D2A] hover:bg-[#C2845D] py-2 text-xs font-bold text-white transition-all cursor-pointer shadow-xs"
                   >
                     <Fingerprint className="h-4 w-4" />
-                    Escribir Etiqueta NFC
+                    Programar etiqueta NFC
                   </button>
 
                   <button
